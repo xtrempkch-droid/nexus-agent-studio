@@ -42,7 +42,7 @@ jobs:
 
     - name: Compilar o executável
       run: |
-        pyinstaller --onefile --name ${{ matrix.artifact_name }} app.py
+        pyinstaller --onefile --name ${{ matrix.artifact_name }} main.py
       shell: bash
 
     - name: Disponibilizar o arquivo gerado (Artefato)
