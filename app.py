@@ -143,7 +143,8 @@ class NexusStudioApp(App):
         ]
 
         try:
-            res = ollama.chat(model=model, messages=self.messages, tools=tools)
+            # Assíncrono via thread para não travar a TUI
+            res = await asyncio.to_thread(ollama.chat, model=model, messages=self.messages, tools=tools)
             msg = res["message"]
             self.messages.append(msg)
 
@@ -154,7 +155,13 @@ class NexusStudioApp(App):
 
                     if fn == "write_file":
                         path, content = args.get("filepath"), args.get("content")
-                        with open(path, "w", encoding="utf-8") as f: f.write(content)
+                        parent_dir = os.path.dirname(path)
+                        if parent_dir:
+                            os.makedirs(parent_dir, exist_ok=True)
+
+                        with open(path, "w", encoding="utf-8") as f:
+                            f.write(content)
+
                         if path == self.current_filepath:
                             self.query_one("#code-editor", TextArea).load_text(content)
                         self.append_chat(f"🤖 Arquivo {path} atualizado.", "chat-tool")
@@ -163,7 +170,7 @@ class NexusStudioApp(App):
                     elif fn == "run_in_container":
                         cmd = args.get("command")
                         self.append_chat(f"🤖 Executando no Docker: {cmd}", "chat-tool")
-                        out = self.runner.execute_in_sandbox(cmd, args.get("image"))
+                        out = await asyncio.to_thread(self.runner.execute_in_sandbox, cmd, args.get("image"))
                         self.log_runner(out)
                         self.messages.append({"role": "tool", "content": out})
 
