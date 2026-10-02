@@ -12,7 +12,8 @@ class GitCopilotManager:
 
     def git_commit_all(self, message: str) -> str:
         self._run_git("git add .")
-        return self._run_git(f'git commit -m "{message}"')
+        safe_msg = message.replace('"', '\\"')
+        return self._run_git(f'git commit -m "{safe_msg}"')
 
     def git_push_branch(self, branch_name: str) -> str:
         return self._run_git(f"git push -u origin {branch_name}")
@@ -40,6 +41,9 @@ class GitCopilotManager:
     def _run_git(self, cmd: str) -> str:
         try:
             res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
-            return res.stdout if res.stdout else res.stderr
+            if res.returncode == 0:
+                return res.stdout if res.stdout.strip() else "Comando Git executado com sucesso."
+            else:
+                return f"Erro no Git (código {res.returncode}): {res.stderr or res.stdout}"
         except Exception as e:
-            return f"Erro no comando Git: {str(e)}"
+            return f"Erro ao executar comando Git: {str(e)}"
