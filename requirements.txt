@@ -1,5 +1,13 @@
+# Interface e Terminal (TUI)
 textual>=0.50.0
+
+# Clientes de API e Integração
 ollama>=0.1.0
-docker>=7.0.0
 PyGithub>=2.0.0
-pyinstaller
+docker>=7.0.0
+
+# Utilitários e Empacotamento
+pyinstaller>=6.0.0
+python-dotenv>=1.0.0
+GitPython>=3.1.0
+requests>=2.31.0
