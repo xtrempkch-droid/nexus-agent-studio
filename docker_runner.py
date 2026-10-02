@@ -18,10 +18,9 @@ class DockerSandboxRunner:
 
         target_image = image or self.default_image
         try:
-            # Executa e descarta o contêiner automaticamente (auto_remove=True)
             container_output = self.client.containers.run(
                 image=target_image,
-                command=f"sh -c '{command}'",
+                command=["sh", "-c", command],
                 volumes={
                     self.workspace_path: {
                         'bind': '/app',
