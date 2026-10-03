@@ -40,7 +40,11 @@ def find_available_port(start_port=8000, max_attempts=10):
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"titulo": "NexusAgent Studio"}
+    )
 
 # --- Rotas da API de Diagnóstico e Infraestrutura ---
 
