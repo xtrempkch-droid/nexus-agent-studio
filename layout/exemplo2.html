@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Code Studio - Copilot & Agent Workspace</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Font Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['Fira Code', 'monospace'],
+                    },
+                    colors: {
+                        ide: {
+                            bg: '#0f172a',
+                            sidebar: '#090d16',
+                            card: '#1e293b',
+                            editor: '#0d1322',
+                            border: '#1e293b',
+                            accent: '#6366f1',
+                            green: '#10b981',
+                            yellow: '#f59e0b',
+                            red: '#ef4444'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom Scrollbar for IDE feel */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #090d16;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+        .code-highlight-add {
+            background-color: rgba(16, 185, 129, 0.15) !important;
+            border-left: 3px solid #10b981;
+        }
+        .code-highlight-del {
+            background-color: rgba(239, 68, 68, 0.15) !important;
+            border-left: 3px solid #ef4444;
+        }
+        .glow-effect {
+            box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col font-sans overflow-hidden select-none bg-slate-950 text-slate-200">
+
+    <!-- TOP HEADER / TOOLBAR -->
+    <header class="h-13 bg-ide-sidebar border-b border-slate-800/80 px-4 flex items-center justify-between text-xs shrink-0 z-20">
+        <!-- App Logo & Project Title -->
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2 font-semibold text-slate-100 text-sm tracking-wide">
+                <div class="w-7 h-7 rounded-lg bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+                    <i data-lucide="bot" class="w-4 h-4"></i>
+                </div>
+                <span>NexusAgent <span class="text-xs font-mono font-normal px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">v2.4</span></span>
+            </div>
+            <span class="text-slate-600">|</span>
+            <div class="flex items-center gap-1.5 text-slate-400 font-mono text-[11px] bg-slate-900/60 px-2.5 py-1 rounded border border-slate-800">
+                <i data-lucide="folder-git-2" class="w-3.5 h-3.5 text-indigo-400"></i>
+                <span>my-python-app / main-branch</span>
+            </div>
+        </div>
+
+        <!-- AI Engine & Mode Selectors -->
+        <div class="flex items-center gap-4">
+            <!-- Model Selection -->
+            <div class="flex items-center gap-2 bg-slate-900/80 p-1 rounded-lg border border-slate-800">
+                <i data-lucide="cpu" class="w-3.5 h-3.5 text-indigo-400 ml-1.5"></i>
+                <select id="aiModelSelect" class="bg-transparent text-slate-200 font-mono text-xs focus:outline-none cursor-pointer pr-2">
+                    <option value="qwen2.5-coder:14b" class="bg-slate-900">Qwen2.5-Coder 14B (Local)</option>
+                    <option value="deepseek-coder-v2" class="bg-slate-900">DeepSeek-Coder-V2 (Local)</option>
+                    <option value="llama3.1:8b" class="bg-slate-900">Llama 3.1 8B Instruct (Local)</option>
+                    <option value="custom-http" class="bg-slate-900">Custom HTTP Endpoint...</option>
+                </select>
+            </div>
+
+            <!-- Mode Switcher (Assistido vs Autônomo) -->
+            <div class="flex items-center bg-slate-900 p-1 rounded-lg border border-slate-800">
+                <button id="btnAssistMode" onclick="setAgentMode('assisted')" class="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-all bg-indigo-600 text-white shadow-sm">
+                    <i data-lucide="user-check" class="w-3.5 h-3.5"></i>
+                    <span>Modo Assistido</span>
+                </button>
+                <button id="btnAutoMode" onclick="setAgentMode('autonomous')" class="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-slate-400 hover:text-slate-200 transition-all">
+                    <i data-lucide="zap" class="w-3.5 h-3.5"></i>
+                    <span>Modo Autônomo</span>
+                </button>
+            </div>
+
+            <!-- Ollama Status Badge -->
+            <div class="flex items-center gap-2 bg-emerald-950/40 border border-emerald-800/50 text-emerald-400 px-2.5 py-1 rounded-full text-[11px] font-mono">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>Ollama Online</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN IDE WORKSPACE AREA -->
+    <div class="flex-1 flex overflow-hidden relative">
+
+        <!-- LEFT PANEL: FILE EXPLORER -->
+        <aside class="w-64 bg-ide-sidebar border-r border-slate-800/80 flex flex-col shrink-0">
+            <!-- Sidebar Header -->
+            <div class="px-3 py-2.5 border-b border-slate-800/80 flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                <span class="flex items-center gap-1.5">
+                    <i data-lucide="files" class="w-3.5 h-3.5"></i> Explorador
+                </span>
+                <div class="flex items-center gap-1">
+                    <button class="hover:text-slate-200 p-1 rounded" title="Novo Arquivo"><i data-lucide="file-plus" class="w-3.5 h-3.5"></i></button>
+                    <button class="hover:text-slate-200 p-1 rounded" title="Atualizar"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i></button>
+                </div>
+            </div>
+
+            <!-- File Tree -->
+            <div class="flex-1 overflow-y-auto py-2 text-xs font-mono" id="fileTree">
+                <!-- Root Folder -->
+                <div class="px-3 py-1 text-slate-400 flex items-center gap-1 font-sans font-semibold text-[11px]">
+                    <i data-lucide="chevron-down" class="w-3.5 h-3.5"></i>
+                    <span>MY-PYTHON-APP</span>
+                </div>
+
+                <!-- Folder items -->
+                <div class="pl-4">
+                    <!-- src folder -->
+                    <div class="flex items-center gap-1.5 px-2 py-1 text-slate-300 hover:bg-slate-800/50 rounded cursor-pointer">
+                        <i data-lucide="folder" class="w-3.5 h-3.5 text-indigo-400"></i>
+                        <span>src</span>
+                    </div>
+                    <div class="pl-4">
+                        <div onclick="openFile('src/main.py')" id="file-src-main.py" class="flex items-center justify-between px-2 py-1 bg-indigo-950/40 text-indigo-300 border-l-2 border-indigo-500 cursor-pointer my-0.5">
+                            <div class="flex items-center gap-1.5 truncate">
+                                <i data-lucide="file-code" class="w-3.5 h-3.5 text-amber-400"></i>
+                                <span class="truncate">main.py</span>
+                            </div>
+                            <span id="tag-main.py" class="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 hidden">M</span>
+                        </div>
+
+                        <div onclick="openFile('src/utils.py')" id="file-src-utils.py" class="flex items-center justify-between px-2 py-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 cursor-pointer my-0.5">
+                            <div class="flex items-center gap-1.5 truncate">
+                                <i data-lucide="file-code" class="w-3.5 h-3.5 text-amber-400"></i>
+                                <span class="truncate">utils.py</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- tests folder -->
+                    <div class="flex items-center gap-1.5 px-2 py-1 text-slate-300 hover:bg-slate-800/50 rounded cursor-pointer mt-1">
+                        <i data-lucide="folder" class="w-3.5 h-3.5 text-indigo-400"></i>
+                        <span>tests</span>
+                    </div>
+                    <div class="pl-4">
+                        <div onclick="openFile('tests/test_main.py')" id="file-tests-test_main.py" class="flex items-center justify-between px-2 py-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 cursor-pointer my-0.5">
+                            <div class="flex items-center gap-1.5 truncate">
+                                <i data-lucide="file-check" class="w-3.5 h-3.5 text-emerald-400"></i>
+                                <span class="truncate">test_main.py</span>
+                            </div>
+                            <span id="tag-test_main.py" class="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hidden">Novo</span>
+                        </div>
+                    </div>
+
+                    <!-- Config Files -->
+                    <div onclick="openFile('requirements.txt')" id="file-requirements.txt" class="flex items-center justify-between px-2 py-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 cursor-pointer my-0.5">
+                        <div class="flex items-center gap-1.5 truncate">
+                            <i data-lucide="file-text" class="w-3.5 h-3.5 text-slate-400"></i>
+                            <span class="truncate">requirements.txt</span>
+                        </div>
+                    </div>
+                    <div onclick="openFile('README.md')" id="file-README.md" class="flex items-center justify-between px-2 py-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 cursor-pointer my-0.5">
+                        <div class="flex items-center gap-1.5 truncate">
+                            <i data-lucide="file-text" class="w-3.5 h-3.5 text-blue-400"></i>
+                            <span class="truncate">README.md</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Agent Quick Metrics -->
+            <div class="p-3 border-t border-slate-800/80 bg-slate-900/40 text-[11px] font-mono text-slate-400 space-y-1.5">
+                <div class="flex justify-between items-center">
+                    <span>Uso do Contexto:</span>
+                    <span class="text-indigo-400">2.4k / 32k tokens</span>
+                </div>
+                <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                    <div class="bg-indigo-500 h-full w-[8%]"></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- CENTER PANEL: CODE EDITOR & TERMINAL -->
+        <main class="flex-1 flex flex-col min-w-0 bg-ide-editor border-r border-slate-800/80">
+            <!-- Tab Header Bar -->
+            <div class="h-9 bg-ide-sidebar border-b border-slate-800/80 flex items-center justify-between px-2 overflow-x-auto text-xs font-mono shrink-0">
+                <div class="flex items-center gap-1" id="tabContainer">
+                    <!-- Active Tab -->
+                    <div class="flex items-center gap-2 px-3 py-1.5 bg-ide-editor text-slate-100 border-t-2 border-indigo-500 rounded-t border-r border-slate-800/60">
+                        <i data-lucide="file-code" class="w-3.5 h-3.5 text-amber-400"></i>
+                        <span id="activeTabName">src/main.py</span>
+                        <i data-lucide="x" class="w-3 h-3 text-slate-500 hover:text-slate-200 cursor-pointer ml-1"></i>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-2 text-slate-400 px-2">
+                    <span id="diffNotification" class="hidden text-[11px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded flex items-center gap-1">
+                        <i data-lucide="sparkles" class="w-3 h-3"></i> Editado pela IA
+                    </span>
+                    <button onclick="clearDiffs()" class="hover:text-slate-200 text-[11px] bg-slate-800 px-2 py-0.5 rounded">Limpar Diffs</button>
+                </div>
+            </div>
+
+            <!-- Code Content Area -->
+            <div class="flex-1 overflow-auto font-mono text-xs leading-relaxed flex relative bg-slate-950/60" id="editorArea">
+                <!-- Line Numbers -->
+                <div class="w-10 py-3 pr-2 text-right text-slate-600 select-none bg-slate-900/30 border-r border-slate-800/50 shrink-0 font-mono" id="lineNumbers">
+                    1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10<br>11<br>12<br>13<br>14<br>15<br>16<br>17<br>18<br>19<br>20
+                </div>
+
+                <!-- Code Container -->
+                <div class="p-3 flex-1 overflow-x-auto text-slate-200 whitespace-pre" id="codeContent">
+<!-- Simulated Python Code -->
+<span class="text-purple-400">import</span> math
+<span class="text-purple-400">import</span> os
+
+<span class="text-purple-400">class</span> <span class="text-yellow-300">DataProcessor</span>:
+    <span class="text-purple-400">def</span> <span class="text-blue-400">__init__</span>(<span class="text-slate-400">self</span>, name: <span class="text-emerald-400">str</span>):
+        <span class="text-slate-400">self</span>.name = name
+        <span class="text-slate-400">self</span>.data = []
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">calculate_stats</span>(<span class="text-slate-400">self</span>, values: <span class="text-emerald-400">list</span>) -> <span class="text-emerald-400">dict</span>:
+        <span class="text-slate-500"># Processa lista de números</span>
+        <span class="text-purple-400">if</span> <span class="text-purple-400">not</span> values:
+            <span class="text-purple-400">return</span> {<span class="text-emerald-300">"mean"</span>: <span class="text-orange-400">0</span>, <span class="text-emerald-300">"total"</span>: <span class="text-orange-400">0</span>}
+
+        total = <span class="text-emerald-400">sum</span>(values)
+        mean = total / <span class="text-emerald-400">len</span>(values)
+        <span class="text-purple-400">return</span> {
+            <span class="text-emerald-300">"mean"</span>: mean,
+            <span class="text-emerald-300">"total"</span>: total
+        }
+
+<span class="text-purple-400">if</span> __name__ == <span class="text-emerald-300">"__main__"</span>:
+    processor = DataProcessor(<span class="text-emerald-300">"Core"</span>)
+    print(processor.calculate_stats([<span class="text-orange-400">10</span>, <span class="text-orange-400">20</span>, <span class="text-orange-400">30</span>]))
+                </div>
+            </div>
+
+            <!-- BOTTOM PANEL: INTEGRATED TERMINAL -->
+            <div class="h-44 bg-slate-900 border-t border-slate-800/80 flex flex-col shrink-0">
+                <!-- Terminal Header Tabs -->
+                <div class="h-8 bg-ide-sidebar border-b border-slate-800/80 flex items-center justify-between px-3 text-xs font-mono text-slate-400">
+                    <div class="flex items-center gap-4">
+                        <button class="text-indigo-400 border-b-2 border-indigo-500 pb-1 pt-1 font-medium flex items-center gap-1.5">
+                            <i data-lucide="terminal" class="w-3.5 h-3.5"></i> Terminal
+                        </button>
+                        <button class="hover:text-slate-200 pb-1 pt-1 flex items-center gap-1.5">
+                            <i data-lucide="activity" class="w-3.5 h-3.5"></i> Agent Logs
+                        </button>
+                        <button class="hover:text-slate-200 pb-1 pt-1 flex items-center gap-1.5">
+                            <i data-lucide="check-circle" class="w-3.5 h-3.5"></i> Test Outputs
+                        </button>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-[10px] text-slate-500 font-mono">Bash / Python 3.11</span>
+                        <button onclick="clearTerminal()" class="hover:text-slate-200"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                    </div>
+                </div>
+
+                <!-- Terminal Output Container -->
+                <div id="terminalOutput" class="flex-1 p-3 font-mono text-xs overflow-y-auto space-y-1 text-slate-300 bg-slate-950/80">
+                    <div class="text-slate-500">$ Ambient venv pronto. Digite instruções para o Agente de IA ao lado.</div>
+                </div>
+            </div>
+        </main>
+
+        <!-- RIGHT PANEL: AI AGENT CHAT & TOOL ACTIONS -->
+        <aside class="w-96 bg-ide-sidebar flex flex-col shrink-0">
+            <!-- Agent Header -->
+            <div class="px-3 py-2.5 border-b border-slate-800/80 flex items-center justify-between text-xs">
+                <div class="flex items-center gap-2 font-medium text-slate-200">
+                    <i data-lucide="sparkles" class="w-4 h-4 text-indigo-400"></i>
+                    <span>Agente de Código IA</span>
+                </div>
+                <div class="flex items-center gap-1 text-[11px] text-slate-400">
+                    <span id="currentModeLabel" class="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-mono">Assistido</span>
+                </div>
+            </div>
+
+            <!-- Chat Message List -->
+            <div id="chatHistory" class="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
+                <!-- Welcome Message -->
+                <div class="bg-slate-900/80 border border-slate-800/80 rounded-lg p-3 text-slate-300 leading-relaxed">
+                    <div class="flex items-center gap-2 mb-1.5 font-semibold text-indigo-400">
+                        <i data-lucide="bot" class="w-4 h-4"></i>
+                        <span>Nexus Assistant</span>
+                    </div>
+                    Olá! Sou seu assistente local. Posso **ler**, **modificar códigos** e **executar comandos no terminal** de forma interativa.
+                    <div class="mt-2 text-[11px] text-slate-400 bg-slate-950 p-2 rounded border border-slate-800 font-mono">
+                        💡 Dica: Alterne o modo para <b>Autônomo</b> se quiser que a IA aplique modificações diretamente sem solicitar confirmações.
+                    </div>
+                </div>
+
+                <!-- Quick Prompts Buttons -->
+                <div class="space-y-1.5 pt-1">
+                    <span class="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Ações Rápidas de Teste:</span>
+                    <button onclick="triggerDemoAction('tests')" class="w-full text-left p-2 rounded bg-slate-900 hover:bg-slate-800/80 border border-slate-800/80 text-slate-300 transition-all flex items-center justify-between group">
+                        <span class="truncate">"Criar testes unitários para main.py e rodar"</span>
+                        <i data-lucide="arrow-right" class="w-3.5 h-3.5 text-slate-500 group-hover:text-indigo-400 shrink-0"></i>
+                    </button>
+                    <button onclick="triggerDemoAction('refactor')" class="w-full text-left p-2 rounded bg-slate-900 hover:bg-slate-800/80 border border-slate-800/80 text-slate-300 transition-all flex items-center justify-between group">
+                        <span class="truncate">"Adicionar cálculo de desvio padrão em main.py"</span>
+                        <i data-lucide="arrow-right" class="w-3.5 h-3.5 text-slate-500 group-hover:text-indigo-400 shrink-0"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chat Input Form -->
+            <div class="p-3 border-t border-slate-800/80 bg-slate-900/50">
+                <form id="chatForm" onsubmit="handleUserSubmit(event)" class="relative">
+                    <textarea 
+                        id="userInput" 
+                        rows="3" 
+                        placeholder="Descreva a tarefa (ex: Adicione validação de erros e execute os testes...)"
+                        class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 resize-none pr-10 font-sans"
+                    ></textarea>
+                    <button 
+                        type="submit" 
+                        class="absolute right-2 bottom-3 p-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+                        title="Enviar Prompt"
+                    >
+                        <i data-lucide="send" class="w-3.5 h-3.5"></i>
+                    </button>
+                </form>
+                <div class="flex items-center justify-between mt-2 text-[10px] text-slate-500 font-mono">
+                    <span>Atalho: Shift + Enter para linha</span>
+                    <span class="text-indigo-400">Ollama API (Local)</span>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- INTERACTIVE JAVASCRIPT SIMULATION LOGIC -->
+    <script>
+        // State Management
+        let currentMode = 'assisted'; // 'assisted' or 'autonomous'
+        let currentFile = 'src/main.py';
+
+        // Initialize Lucide Icons
+        lucide.createIcons();
+
+        // Switch Agent Mode
+        function setAgentMode(mode) {
+            currentMode = mode;
+            const btnAssist = document.getElementById('btnAssistMode');
+            const btnAuto = document.getElementById('btnAutoMode');
+            const modeLabel = document.getElementById('currentModeLabel');
+
+            if (mode === 'assisted') {
+                btnAssist.className = "flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-all bg-indigo-600 text-white shadow-sm";
+                btnAuto.className = "flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-slate-400 hover:text-slate-200 transition-all";
+                modeLabel.innerText = "Assistido";
+                modeLabel.className = "px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-mono";
+                appendTerminalLog("system", "Modo alterado para: ASSISTIDO (Confirmação necessária para alterações).");
+            } else {
+                btnAuto.className = "flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-all bg-amber-600 text-white shadow-sm";
+                btnAssist.className = "flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-slate-400 hover:text-slate-200 transition-all";
+                modeLabel.innerText = "Autônomo";
+                modeLabel.className = "px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 font-mono";
+                appendTerminalLog("system", "Modo alterado para: AUTÔNOMO (IA executará edições e comandos diretamente).");
+            }
+        }
+
+        // Handle User Chat Submission
+        function handleUserSubmit(e) {
+            e.preventDefault();
+            const input = document.getElementById('userInput');
+            const text = input.value.trim();
+            if (!text) return;
+
+            appendUserMessage(text);
+            input.value = '';
+
+            // Simulate AI Agent process
+            processAgentRequest(text);
+        }
+
+        function appendUserMessage(text) {
+            const history = document.getElementById('chatHistory');
+            const msgHtml = `
+                <div class="bg-indigo-950/40 border border-indigo-800/40 rounded-lg p-3 text-slate-200 leading-relaxed font-sans">
+                    <div class="flex items-center gap-2 mb-1 font-semibold text-indigo-300">
+                        <i data-lucide="user" class="w-3.5 h-3.5"></i>
+                        <span>Você</span>
+                    </div>
+                    <p>${escapeHtml(text)}</p>
+                </div>
+            `;
+            history.insertAdjacentHTML('beforeend', msgHtml);
+            history.scrollTop = history.scrollHeight;
+            lucide.createIcons();
+        }
+
+        function appendAgentThinking() {
+            const history = document.getElementById('chatHistory');
+            const id = 'thinking-' + Date.now();
+            const msgHtml = `
+                <div id="${id}" class="bg-slate-900 border border-slate-800 rounded-lg p-3 text-slate-400 text-xs flex items-center gap-2">
+                    <i data-lucide="loader-2" class="w-4 h-4 text-indigo-400 animate-spin"></i>
+                    <span>Analizando repositório e planejando ações...</span>
+                </div>
+            `;
+            history.insertAdjacentHTML('beforeend', msgHtml);
+            history.scrollTop = history.scrollHeight;
+            lucide.createIcons();
+            return id;
+        }
+
+        function removeElement(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        // Trigger Preset Actions for demonstration
+        function triggerDemoAction(type) {
+            if (type === 'tests') {
+                document.getElementById('userInput').value = "Crie um arquivo de teste unitário em tests/test_main.py e execute no terminal com pytest.";
+            } else if (type === 'refactor') {
+                document.getElementById('userInput').value = "Adicione a função de cálculo de desvio padrão na classe DataProcessor de main.py.";
+            }
+            handleUserSubmit(new Event('submit'));
+        }
+
+        // Process AI Workflow Simulation
+        function processAgentRequest(promptText) {
+            const thinkId = appendAgentThinking();
+
+            setTimeout(() => {
+                removeElement(thinkId);
+
+                if (promptText.toLowerCase().includes('teste') || promptText.toLowerCase().includes('pytest')) {
+                    runTestCreationWorkflow();
+                } else if (promptText.toLowerCase().includes('desvio') || promptText.toLowerCase().includes('main.py')) {
+                    runRefactorWorkflow();
+                } else {
+                    runGenericWorkflow(promptText);
+                }
+            }, 1200);
+        }
+
+        // Workflow 1: Create Test File and Run pytest
+        function runTestCreationWorkflow() {
+            const history = document.getElementById('chatHistory');
+
+            // Agent explanation
+            const agentMsg = `
+                <div class="bg-slate-900 border border-slate-800 rounded-lg p-3 text-slate-300 space-y-2">
+                    <div class="flex items-center gap-2 font-semibold text-indigo-400">
+                        <i data-lucide="bot" class="w-4 h-4"></i>
+                        <span>Nexus Assistant</span>
+                    </div>
+                    <p>Vou criar a suite de testes para <code class="bg-slate-950 px-1 py-0.5 rounded text-amber-300 font-mono">main.py</code> no arquivo <code class="bg-slate-950 px-1 py-0.5 rounded text-emerald-300 font-mono">tests/test_main.py</code>.</p>
+                </div>
+            `;
+            history.insertAdjacentHTML('beforeend', agentMsg);
+
+            if (currentMode === 'assisted') {
+                // Show Approval Card for Write File
+                const approvalCard = `
+                    <div id="action-card-1" class="bg-slate-900/90 border border-indigo-500/40 rounded-lg p-3 space-y-2 glow-effect">
+                        <div class="flex items-center justify-between text-indigo-300 font-mono text-[11px]">
+                            <span class="flex items-center gap-1.5"><i data-lucide="file-plus" class="w-3.5 h-3.5"></i> Tool Call: write_file</span>
+                            <span class="bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded">Pendente</span>
+                        </div>
+                        <div class="text-slate-300 font-mono text-[11px] bg-slate-950 p-2 rounded border border-slate-800">
+                            <strong>Arquivo:</strong> tests/test_main.py<br>
+                            <strong>Ação:</strong> Criar script com unittest para DataProcessor.
+                        </div>
+                        <div class="flex gap-2 pt-1">
+                            <button onclick="approveAction('create_test_file')" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-1 px-2 rounded text-xs transition-colors flex items-center justify-center gap-1">
+                                <i data-lucide="check" class="w-3.5 h-3.5"></i> Aprovar Edição
+                            </button>
+                            <button onclick="rejectAction('action-card-1')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-1 px-2 rounded text-xs transition-colors">
+                                Rejeitar
+                            </button>
+                        </div>
+                    </div>
+                `;
+                history.insertAdjacentHTML('beforeend', approvalCard);
+            } else {
+                // Autonomous Execution
+                executeCreateTestFile();
+            }
+            history.scrollTop = history.scrollHeight;
+            lucide.createIcons();
+        }
+
+        function approveAction(actionType) {
+            removeElement('action-card-1');
+            if (actionType === 'create_test_file') {
+                executeCreateTestFile();
+            } else if (actionType === 'run_terminal_pytest') {
+                executeTerminalPytest();
+            } else if (actionType === 'apply_refactor') {
+                executeRefactorCode();
+            }
+        }
+
+        function rejectAction(cardId) {
+            removeElement(cardId);
+            appendTerminalLog("system", "Ação cancelada pelo usuário no Modo Assistido.");
+        }
+
+        function executeCreateTestFile() {
+            // Show new file tag
+            document.getElementById('tag-test_main.py').classList.remove('hidden');
+            appendTerminalLog("agent", "WRITE: Arquivo 'tests/test_main.py' criado com sucesso.");
+
+            const history = document.getElementById('chatHistory');
+            
+            // Ask for terminal execution approval
+            if (currentMode === 'assisted') {
+                const terminalCard = `
+                    <div id="action-card-terminal" class="bg-slate-900/90 border border-amber-500/40 rounded-lg p-3 space-y-2 glow-effect">
+                        <div class="flex items-center justify-between text-amber-300 font-mono text-[11px]">
+                            <span class="flex items-center gap-1.5"><i data-lucide="terminal" class="w-3.5 h-3.5"></i> Tool Call: run_command</span>
+                            <span class="bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded">Terminal</span>
+                        </div>
+                        <div class="text-slate-300 font-mono text-[11px] bg-slate-950 p-2 rounded border border-slate-800">
+                            $ pytest tests/test_main.py
+                        </div>
+                        <div class="flex gap-2 pt-1">
+                            <button onclick="approveAction('run_terminal_pytest')" class="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-medium py-1 px-2 rounded text-xs transition-colors flex items-center justify-center gap-1">
+                                <i data-lucide="play" class="w-3.5 h-3.5"></i> Executar no Terminal
+                            </button>
+                            <button onclick="rejectAction('action-card-terminal')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-1 px-2 rounded text-xs">
+                                Rejeitar
+                            </button>
+                        </div>
+                    </div>
+                `;
+                history.insertAdjacentHTML('beforeend', terminalCard);
+            } else {
+                executeTerminalPytest();
+            }
+            history.scrollTop = history.scrollHeight;
+            lucide.createIcons();
+        }
+
+        function executeTerminalPytest() {
+            removeElement('action-card-terminal');
+            appendTerminalLog("cmd", "pytest tests/test_main.py");
+            
+            setTimeout(() => {
+                appendTerminalLog("out", "================ test session starts ================");
+                appendTerminalLog("out", "collected 2 items\n");
+                appendTerminalLog("out", "tests/test_main.py::test_calculate_stats PASSED [50%]");
+                appendTerminalLog("out", "tests/test_main.py::test_empty_list PASSED [100%]");
+                appendTerminalLog("success", "\n2 passed in 0.14s");
+
+                const history = document.getElementById('chatHistory');
+                history.insertAdjacentHTML('beforeend', `
+                    <div class="bg-emerald-950/30 border border-emerald-800/40 rounded-lg p-3 text-emerald-300 text-xs">
+                        <i data-lucide="check-circle-2" class="inline w-3.5 h-3.5 mr-1"></i>
+                        Testes criados e validados no terminal com sucesso!
+                    </div>
+                `);
+                history.scrollTop = history.scrollHeight;
+                lucide.createIcons();
+            }, 800);
+        }
+
+        // Workflow 2: Refactor Code (Add std dev)
+        function runRefactorWorkflow() {
+            const history = document.getElementById('chatHistory');
+
+            if (currentMode === 'assisted') {
+                const card = `
+                    <div id="action-card-refactor" class="bg-slate-900/90 border border-indigo-500/40 rounded-lg p-3 space-y-2 glow-effect">
+                        <div class="flex items-center justify-between text-indigo-300 font-mono text-[11px]">
+                            <span class="flex items-center gap-1.5"><i data-lucide="file-edit" class="w-3.5 h-3.5"></i> Tool Call: edit_file</span>
+                            <span class="bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded">main.py</span>
+                        </div>
+                        <div class="text-slate-300 font-mono text-[11px] bg-slate-950 p-2 rounded border border-slate-800">
+                            Adicionar método <code class="text-yellow-300">std_dev()</code> utilizando a biblioteca math.
+                        </div>
+                        <div class="flex gap-2 pt-1">
+                            <button onclick="approveAction('apply_refactor')" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-1 px-2 rounded text-xs transition-colors flex items-center justify-center gap-1">
+                                <i data-lucide="check" class="w-3.5 h-3.5"></i> Aplicar Alteração
+                            </button>
+                            <button onclick="rejectAction('action-card-refactor')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-1 px-2 rounded text-xs">
+                                Rejeitar
+                            </button>
+                        </div>
+                    </div>
+                `;
+                history.insertAdjacentHTML('beforeend', card);
+            } else {
+                executeRefactorCode();
+            }
+            history.scrollTop = history.scrollHeight;
+            lucide.createIcons();
+        }
+
+        function executeRefactorCode() {
+            removeElement('action-card-refactor');
+            document.getElementById('tag-main.py').classList.remove('hidden');
+            document.getElementById('diffNotification').classList.remove('hidden');
+
+            const codeContainer = document.getElementById('codeContent');
+            codeContainer.innerHTML = `
+<span class="text-purple-400">import</span> math
+<span class="text-purple-400">import</span> os
+
+<span class="text-purple-400">class</span> <span class="text-yellow-300">DataProcessor</span>:
+    <span class="text-purple-400">def</span> <span class="text-blue-400">__init__</span>(<span class="text-slate-400">self</span>, name: <span class="text-emerald-400">str</span>):
+        <span class="text-slate-400">self</span>.name = name
+        <span class="text-slate-400">self</span>.data = []
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">calculate_stats</span>(<span class="text-slate-400">self</span>, values: <span class="text-emerald-400">list</span>) -> <span class="text-emerald-400">dict</span>:
+        <span class="text-purple-400">if</span> <span class="text-purple-400">not</span> values:
+            <span class="text-purple-400">return</span> {<span class="text-emerald-300">"mean"</span>: <span class="text-orange-400">0</span>, <span class="text-emerald-300">"std_dev"</span>: <span class="text-orange-400">0</span>}
+
+        total = <span class="text-emerald-400">sum</span>(values)
+        mean = total / <span class="text-emerald-400">len</span>(values)
+        
+<div class="code-highlight-add font-mono block px-1 py-0.5 my-0.5">        <span class="text-slate-500"># Novo cálculo de desvio padrão inserido pela IA</span>
+        variance = <span class="text-emerald-400">sum</span>((x - mean) ** <span class="text-orange-400">2</span> <span class="text-purple-400">for</span> x <span class="text-purple-400">in</span> values) / <span class="text-emerald-400">len</span>(values)
+        std_dev = math.sqrt(variance)</div>
+        <span class="text-purple-400">return</span> {
+            <span class="text-emerald-300">"mean"</span>: mean,
+<div class="code-highlight-add font-mono block px-1 py-0.5 my-0.5">            <span class="text-emerald-300">"std_dev"</span>: std_dev,</div>            <span class="text-emerald-300">"total"</span>: total
+        }
+            `;
+
+            // Update line numbers count
+            document.getElementById('lineNumbers').innerHTML = Array.from({length: 25}, (_, i) => i + 1).join('<br>');
+
+            appendTerminalLog("agent", "PATCH: 'src/main.py' atualizado com suporte a std_dev.");
+
+            const history = document.getElementById('chatHistory');
+            history.insertAdjacentHTML('beforeend', `
+                <div class="bg-indigo-950/40 border border-indigo-800/40 rounded-lg p-3 text-slate-300 text-xs">
+                    <i data-lucide="sparkles" class="inline w-3.5 h-3.5 text-indigo-400 mr-1"></i>
+                    Código atualizado! Os trechos destacados em verde mostram as edições aplicadas.
+                </div>
+            `);
+            history.scrollTop = history.scrollHeight;
+            lucide.createIcons();
+        }
+
+        function runGenericWorkflow(promptText) {
+            const history = document.getElementById('chatHistory');
+            history.insertAdjacentHTML('beforeend', `
+                <div class="bg-slate-900 border border-slate-800 rounded-lg p-3 text-slate-300 text-xs">
+                    Entendi o pedido: "${escapeHtml(promptText)}". Analisei o projeto local via Ollama e nenhuma alteração estrutural foi necessária.
+                </div>
+            `);
+            history.scrollTop = history.scrollHeight;
+        }
+
+        // Open Files from Sidebar
+        function openFile(filepath) {
+            currentFile = filepath;
+            document.getElementById('activeTabName').innerText = filepath;
+            
+            // Highlight sidebar selection
+            const files = ['src/main.py', 'src/utils.py', 'tests/test_main.py', 'requirements.txt', 'README.md'];
+            files.forEach(f => {
+                const el = document.getElementById('file-' + f.replace('/', '-'));
+                if (el) {
+                    if (f === filepath) {
+                        el.className = "flex items-center justify-between px-2 py-1 bg-indigo-950/40 text-indigo-300 border-l-2 border-indigo-500 cursor-pointer my-0.5";
+                    } else {
+                        el.className = "flex items-center justify-between px-2 py-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 cursor-pointer my-0.5";
+                    }
+                }
+            });
+        }
+
+        // Clear Diffs Visual
+        function clearDiffs() {
+            document.getElementById('diffNotification').classList.add('hidden');
+            const highlights = document.querySelectorAll('.code-highlight-add');
+            highlights.forEach(h => {
+                h.classList.remove('code-highlight-add');
+            });
+        }
+
+        // Terminal Logging Helpers
+        function appendTerminalLog(type, text) {
+            const term = document.getElementById('terminalOutput');
+            let color = "text-slate-300";
+            let prefix = "";
+
+            if (type === "cmd") {
+                color = "text-amber-400 font-semibold";
+                prefix = "$ ";
+            } else if (type === "agent") {
+                color = "text-indigo-400";
+                prefix = "[AI-Agent] ";
+            } else if (type === "system") {
+                color = "text-slate-500 italic";
+                prefix = "[System] ";
+            } else if (type === "success") {
+                color = "text-emerald-400 font-semibold";
+            }
+
+            term.insertAdjacentHTML('beforeend', `<div class="${color}">${prefix}${escapeHtml(text)}</div>`);
+            term.scrollTop = term.scrollHeight;
+        }
+
+        function clearTerminal() {
+            document.getElementById('terminalOutput').innerHTML = '<div class="text-slate-500">$ Terminal limpo.</div>';
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+    </script>
+</body>
+</html>
