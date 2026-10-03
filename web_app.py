@@ -1,109 +1,142 @@
-import sys
 import os
-import socket
-import asyncio
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-import ollama
+import sys
+import subprocess
+import json
+import requests
+from flask import Flask, render_template, request, jsonify
 
-from system_checker import SystemEnvironmentManager
-from docker_runner import DockerSandboxRunner
-from github_copilot import GitCopilotManager
-
+# Configuração de caminhos para empacotamento com PyInstaller
 if getattr(sys, 'frozen', False):
     base_dir = sys._MEIPASS
+    template_folder = os.path.join(base_dir, 'templates')
+    static_folder = os.path.join(base_dir, 'static')
+    app = Flask(__name__, template_folder=template_folder, static_folder=static_folder)
 else:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    app = Flask(__name__)
 
-templates_dir = os.path.join(base_dir, "templates")
-static_dir = os.path.join(base_dir, "static")
+WORKSPACE_DIR = os.path.abspath(os.getcwd())
 
-os.makedirs(templates_dir, exist_ok=True)
-os.makedirs(static_dir, exist_ok=True)
+def get_relative_path(path):
+    try:
+        return os.path.relpath(path, WORKSPACE_DIR)
+    except ValueError:
+        return path
 
-app = FastAPI(title="NexusAgent Studio Web")
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
-templates = Jinja2Templates(directory=templates_dir)
-
-runner = DockerSandboxRunner()
-git_mgr = GitCopilotManager()
-
-def find_available_port(start_port=8000, max_attempts=10):
-    for port in range(start_port, start_port + max_attempts):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('127.0.0.1', port)) != 0:
-                return port
-    return start_port
-
-@app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html",
-        context={"titulo": "NexusAgent Studio"}
-    )
-
-# --- Rotas da API de Diagnóstico e Infraestrutura ---
-
-@app.get("/api/system/status")
-async def get_system_status():
-    return JSONResponse({
-        "ollama": SystemEnvironmentManager.check_ollama_status(),
-        "docker": SystemEnvironmentManager.check_docker_status()
+@app.route('/api/workspace', methods=['GET'])
+def get_workspace_info():
+    return jsonify({
+        "workspace_dir": WORKSPACE_DIR,
+        "status": "online"
     })
 
-@app.post("/api/system/install-ollama")
-async def api_install_ollama():
-    msg = await asyncio.to_thread(SystemEnvironmentManager.install_ollama)
-    return JSONResponse({"message": msg})
+@app.route('/api/tree', methods=['GET'])
+def list_files():
+    """Retorna a árvore de arquivos do workspace."""
+    file_list = []
+    ignored_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build'}
+    
+    for root, dirs, files in os.walk(WORKSPACE_DIR):
+        dirs[:] = [d for d in dirs if d not in ignored_dirs]
+        for file in files:
+            full_path = os.path.join(root, file)
+            rel_path = get_relative_path(full_path)
+            file_list.append({
+                "path": rel_path.replace("\\", "/"),
+                "name": file,
+                "is_dir": False
+            })
+            
+    return jsonify({"files": sorted(file_list, key=lambda x: x["path"])})
 
-@app.post("/api/system/start-ollama")
-async def api_start_ollama():
-    msg = await asyncio.to_thread(SystemEnvironmentManager.start_ollama)
-    return JSONResponse({"message": msg})
+@app.route('/api/file/read', methods=['POST'])
+def read_file():
+    """Lê o conteúdo de um arquivo específico."""
+    data = request.json or {}
+    rel_path = data.get('path')
+    if not rel_path:
+        return jsonify({"error": "Caminho do arquivo não informado"}), 400
 
-@app.post("/api/system/pull-model")
-async def api_pull_model(data: dict):
-    model_name = data.get("model", "qwen2.5-coder")
-    msg = await asyncio.to_thread(SystemEnvironmentManager.pull_model, model_name)
-    return JSONResponse({"message": msg})
+    full_path = os.path.join(WORKSPACE_DIR, rel_path)
+    if not os.path.exists(full_path):
+        return jsonify({"error": "Arquivo não encontrado"}), 404
 
-# --- WebSockets para Chat / Agente ---
-
-@app.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket):
-    await websocket.accept()
-    messages = [
-        {
-            "role": "system",
-            "content": "Você é o assistente NexusAgent Studio rodando na Web com suporte a Docker e Git."
-        }
-    ]
     try:
-        while True:
-            user_input = await websocket.receive_text()
-            messages.append({"role": "user", "content": user_input})
-            
-            res = await asyncio.to_thread(
-                ollama.chat, 
-                model="qwen2.5-coder", 
-                messages=messages
-            )
-            
-            ai_msg = res["message"]["content"]
-            messages.append({"role": "assistant", "content": ai_msg})
-            
-            await websocket.send_json({"type": "ai_response", "content": ai_msg})
-    except WebSocketDisconnect:
-        print("Cliente desconectado do WebSocket.")
+        with open(full_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return jsonify({"path": rel_path, "content": content})
     except Exception as e:
-        await websocket.send_json({"type": "ai_response", "content": f"⚠️ Erro no Ollama: {str(e)}"})
+        return jsonify({"error": f"Erro ao ler arquivo: {str(e)}"}), 500
 
-if __name__ == "__main__":
-    port = find_available_port(8000)
-    print(f"\n🌍 NexusAgent Studio Web disponível em: http://127.0.0.1:{port}\n")
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=port)
+@app.route('/api/file/save', methods=['POST'])
+def save_file():
+    """Salva alterações em um arquivo."""
+    data = request.json or {}
+    rel_path = data.get('path')
+    content = data.get('content', '')
+
+    if not rel_path:
+        return jsonify({"error": "Caminho do arquivo não informado"}), 400
+
+    full_path = os.path.join(WORKSPACE_DIR, rel_path)
+    try:
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return jsonify({"success": True, "path": rel_path})
+    except Exception as e:
+        return jsonify({"error": f"Erro ao salvar arquivo: {str(e)}"}), 500
+
+@app.route('/api/execute', methods=['POST'])
+def execute_command():
+    """Executa comandos de terminal no diretório do workspace."""
+    data = request.json or {}
+    command = data.get('command')
+    if not command:
+        return jsonify({"error": "Comando não especificado"}), 400
+
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd=WORKSPACE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        return jsonify({
+            "command": command,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.returncode
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Comando excedeu o tempo limite de execução (30s)"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Falha na execução: {str(e)}"}), 500
+
+@app.route('/api/ollama/models', methods=['POST'])
+def list_ollama_models():
+    """Consulta os modelos disponíveis no Ollama local."""
+    data = request.json or {}
+    ollama_url = data.get('ollama_url', 'http://localhost:11434').rstrip('/')
+    try:
+        response = requests.get(f"{ollama_url}/api/tags", timeout=5)
+        if response.status_code == 200:
+            models_data = response.json()
+            models = [m['name'] for m in models_data.get('models', [])]
+            return jsonify({"status": "connected", "models": models})
+        return jsonify({"status": "error", "message": f"HTTP {response.status_code}"}), 400
+    except Exception as e:
+        return jsonify({"status": "offline", "message": str(e)}), 200
+
+if __name__ == '__main__':
+    print("=" * 60)
+    print(" 🚀 NexusAgent Studio Web Server Iniciado!")
+    print(f" 📂 Workspace Ativo: {WORKSPACE_DIR}")
+    print(" 🌐 Acesse a interface em: http://127.0.0.1:5000")
+    print("=" * 60)
+    app.run(host='0.0.0.0', port=5000, debug=False)
