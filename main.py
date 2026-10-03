@@ -11,17 +11,17 @@ from github_copilot import GitCopilotManager
 
 class NexusStudioApp(App):
     CSS = """
-    Screen { background: $surface; }
+    Screen { background: #121212; }
     #main-container { layout: horizontal; height: 1fr; }
-    #sidebar { width: 34; background: \(panel; border-right: heavy\)accent; padding: 1; }
+    #sidebar { width: 34; background: #1e1e1e; border-right: heavy #007acc; padding: 1; }
     #editor-container { width: 1fr; height: 1fr; }
-    #chat-container { width: 46; background: \(panel; border-left: heavy\)accent; padding: 1; }
-    #code-editor { height: 1fr; border: solid $accent; }
-    #chat-history { height: 1fr; border: solid \(secondary; padding: 1; background:\)surface-darken-1; }
-    #terminal-logs { height: 10; border: solid $warning; background: black; color: green; padding: 1; }
-    .chat-user { color: $accent; text-style: bold; margin-top: 1; }
-    .chat-ai { color: $success; margin-top: 1; }
-    .chat-tool { color: $warning; text-style: italic; }
+    #chat-container { width: 46; background: #1e1e1e; border-left: heavy #007acc; padding: 1; }
+    #code-editor { height: 1fr; border: solid #007acc; }
+    #chat-history { height: 1fr; border: solid #333333; padding: 1; background: #0f0f0f; }
+    #terminal-logs { height: 10; border: solid #e5a000; background: black; color: #00ff00; padding: 1; }
+    .chat-user { color: #007acc; text-style: bold; margin-top: 1; }
+    .chat-ai { color: #00ff00; margin-top: 1; }
+    .chat-tool { color: #e5a000; text-style: italic; }
     .setting-label { margin-top: 1; text-style: bold; }
     """
 
@@ -78,7 +78,7 @@ class NexusStudioApp(App):
     def on_switch_changed(self, event: Switch.Changed) -> None:
         self.autonomous_mode = event.value
         status = self.query_one("#mode-status", Label)
-        status.update(" 🔥 AUTÔNOMO" if event.value else " 🛡️ ASSISTIDO")
+        status.update(" 🔥 AUTÔNOMO" if event.value else " 🛡️️ ASSISTIDO")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-load-file":
@@ -143,7 +143,6 @@ class NexusStudioApp(App):
         ]
 
         try:
-            # Assíncrono via thread para não travar a TUI
             res = await asyncio.to_thread(ollama.chat, model=model, messages=self.messages, tools=tools)
             msg = res["message"]
             self.messages.append(msg)
