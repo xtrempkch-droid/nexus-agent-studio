@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NexusAgent Studio Web</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header class="app-header">
+        <h1>🤖 NexusAgent Studio</h1>
+        <span class="badge">Modo Web Visual</span>
+    </header>
+
+    <div class="main-layout">
+        <!-- Sidebar de Controles -->
+        aside class="sidebar">
+            <h3>⚙️ Configurações</h3>
+            <label for="model">Modelo LLM:</label>
+            <select id="model">
+                <option value="qwen2.5-coder">Qwen 2.5 Coder</option>
+                <option value="deepseek-r1">DeepSeek R1</option>
+            </select>
+        </aside>
+
+        <!-- Editor e Logs -->
+        <main class="editor-area">
+            <div class="panel-header">📝 Editor de Código</div>
+            <textarea id="code-editor" placeholder="# Digite seu código aqui..."></textarea>
+            <div class="panel-header">🐳 Logs do Docker Sandbox</div>
+            <div id="terminal-logs">> Aguardando comandos...</div>
+        </main>
+
+        <!-- Painel de Chat do Agente -->
+        <section class="chat-area">
+            <div class="panel-header">💬 Agente Copiloto</div>
+            <div id="chat-messages"></div>
+            <div class="chat-input-bar">
+                <input type="text" id="user-input" placeholder="Pergunte ou solicite algo à IA...">
+                <button id="send-btn">Enviar</button>
+            </div>
+        </section>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
