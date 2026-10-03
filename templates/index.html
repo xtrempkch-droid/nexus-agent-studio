@@ -9,12 +9,17 @@
 <body>
     <header class="app-header">
         <h1>🤖 NexusAgent Studio</h1>
+        <div class="nav-tabs">
+            <button class="tab-btn active" onclick="switchTab('workspace')">📝 Workspace</button>
+            <button class="tab-btn" onclick="switchTab('infra')">⚙️ Infraestrutura & Diagnóstico</button>
+        </div>
         <span class="badge">Modo Web Visual</span>
     </header>
 
-    <div class="main-layout">
+    <!-- ABA 1: WORKSPACE DE DESENVOLVIMENTO -->
+    <div id="tab-workspace" class="main-layout tab-content active">
         <!-- Sidebar de Controles -->
-        aside class="sidebar">
+        <aside class="sidebar">
             <h3>⚙️ Configurações</h3>
             <label for="model">Modelo LLM:</label>
             <select id="model">
@@ -40,6 +45,38 @@
                 <button id="send-btn">Enviar</button>
             </div>
         </section>
+    </div>
+
+    <!-- ABA 2: DIAGNÓSTICO E INFRAESTRUTURA -->
+    <div id="tab-infra" class="tab-content infra-layout" style="display: none;">
+        <h2>⚙️ Status do Ambiente & Reparo de Dependências</h2>
+        <p>Utilize esta seção para verificar e instalar dependências essenciais do sistema.</p>
+
+        <div class="cards-grid">
+            <!-- Card Ollama -->
+            <div class="status-card">
+                <h3>🦙 Ollama Engine</h3>
+                <p>Status: <span id="ollama-status-badge" class="badge-status">Verificando...</span></p>
+                <p>Modelos Baixados: <span id="ollama-models-list">Nenhum</span></p>
+                <div class="card-actions">
+                    <button class="btn-action" onclick="installOllama()">📥 Instalar Ollama</button>
+                    <button class="btn-action" onclick="startOllama()">🚀 Iniciar Serviço</button>
+                    <button class="btn-action" onclick="pullModel('qwen2.5-coder')">📥 Baixar Qwen 2.5 Coder</button>
+                </div>
+            </div>
+
+            <!-- Card Docker -->
+            <div class="status-card">
+                <h3>🐳 Docker Sandbox</h3>
+                <p>Status: <span id="docker-status-badge" class="badge-status">Verificando...</span></p>
+                <p class="card-hint">Para ativar o Docker no Ubuntu, execute no terminal:<br><code>sudo systemctl start docker</code></p>
+            </div>
+        </div>
+
+        <div class="logs-container">
+            <div class="panel-header">📋 Log de Ações do Sistema</div>
+            <div id="system-logs">> Diagnóstico pronto.</div>
+        </div>
     </div>
 
     <script src="/static/js/app.js"></script>
