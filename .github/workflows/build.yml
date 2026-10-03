@@ -1,4 +1,4 @@
-name: Build e Compilação Multiplataforma
+name: Build e Compilação Multiplataforma (TUI + Web)
 
 on:
   push:
@@ -15,14 +15,20 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: app-linux
-            exe_name: app-linux
+            tui_name: nexus-tui-linux
+            web_name: nexus-web-linux
+            tui_exe: nexus-tui-linux
+            web_exe: nexus-web-linux
           - os: windows-latest
-            artifact_name: app-windows
-            exe_name: app-windows.exe
+            tui_name: nexus-tui-windows
+            web_name: nexus-web-windows
+            tui_exe: nexus-tui-windows.exe
+            web_exe: nexus-web-windows.exe
           - os: macos-latest
-            artifact_name: app-macos
-            exe_name: app-macos
+            tui_name: nexus-tui-macos
+            web_name: nexus-web-macos
+            tui_exe: nexus-tui-macos
+            web_exe: nexus-web-macos
 
     steps:
     - name: Baixar o código do repositório
@@ -40,13 +46,27 @@ jobs:
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       shell: bash
 
-    - name: Compilar o executável
+    - name: Compilar Executável TUI (Terminal)
       run: |
-        pyinstaller --onefile --name ${{ matrix.artifact_name }} main.py
+        pyinstaller --onefile --name ${{ matrix.tui_name }} main.py
       shell: bash
 
-    - name: Disponibilizar o arquivo gerado (Artefato)
+    - name: Compilar Executável WEB (Navegador com Static e Templates)
+      run: |
+        pyinstaller --onefile \
+          --add-data "templates:templates" \
+          --add-data "static:static" \
+          --name ${{ matrix.web_name }} web_app.py
+      shell: bash
+
+    - name: Disponibilizar Executável TUI (Artefato)
       uses: actions/upload-artifact@v4
       with:
-        name: Executavel-${{ matrix.os }}
-        path: dist/${{ matrix.exe_name }}
+        name: Executavel-TUI-${{ matrix.os }}
+        path: dist/${{ matrix.tui_exe }}
+
+    - name: Disponibilizar Executável WEB (Artefato)
+      uses: actions/upload-artifact@v4
+      with:
+        name: Executavel-WEB-${{ matrix.os }}
+        path: dist/${{ matrix.web_exe }}
