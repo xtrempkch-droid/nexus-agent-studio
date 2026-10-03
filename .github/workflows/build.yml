@@ -1,75 +1,72 @@
 name: Build e Compilação Multiplataforma (TUI + Web)
 
 on:
-push:
-branches: [ "main", "master" ]
-pull_request:
-branches: [ "main", "master" ]
-workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
-build:
-name: Compilar para ${{ matrix.os }}
-runs-on: ${{ matrix.os }}
-strategy:
-matrix:
-include:
-- os: ubuntu-latest
-tui_name: nexus-tui-linux
-web_name: nexus-web-linux
-tui_exe: nexus-tui-linux
-web_exe: nexus-web-linux
-sep: ":"
-- os: windows-latest
-tui_name: nexus-tui-windows
-web_name: nexus-web-windows
-tui_exe: nexus-tui-windows.exe
-web_exe: nexus-web-windows.exe
-sep: ";"
-- os: macos-latest
-tui_name: nexus-tui-macos
-web_name: nexus-web-macos
-tui_exe: nexus-tui-macos
-web_exe: nexus-web-macos
-sep: ":"
+  build:
+    name: Compilar para ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            tui_name: nexus-tui-linux
+            web_name: nexus-web-linux
+            tui_exe: nexus-tui-linux
+            web_exe: nexus-web-linux
+          - os: windows-latest
+            tui_name: nexus-tui-windows
+            web_name: nexus-web-windows
+            tui_exe: nexus-tui-windows.exe
+            web_exe: nexus-web-windows.exe
+          - os: macos-latest
+            tui_name: nexus-tui-macos
+            web_name: nexus-web-macos
+            tui_exe: nexus-tui-macos
+            web_exe: nexus-web-macos
 
-steps:
-- name: Baixar o código do repositório
-  uses: actions/checkout@v4
+    steps:
+    - name: Baixar o código do repositório
+      uses: actions/checkout@v4
 
-- name: Configurar o ambiente Python
-  uses: actions/setup-python@v5
-  with:
-    python-version: '3.11'
+    - name: Configurar o ambiente Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-- name: Instalar dependências
-  run: |
-    python -m pip install --upgrade pip
-    pip install pyinstaller
-    if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-  shell: bash
+    - name: Instalar dependências
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      shell: bash
 
-- name: Compilar Executável TUI (Terminal)
-  run: |
-    pyinstaller --onefile --name ${{ matrix.tui_name }} main.py
-  shell: bash
+    - name: Compilar Executável TUI (Terminal)
+      run: |
+        pyinstaller --onefile --name ${{ matrix.tui_name }} main.py
+      shell: bash
 
-- name: Compilar Executável WEB (Navegador com Static e Templates)
-  run: |
-    pyinstaller --onefile \
-      --add-data "templates${{ matrix.sep }}templates" \
-      --add-data "static${{ matrix.sep }}static" \
-      --name ${{ matrix.web_name }} web_app.py
-  shell: bash
+    - name: Compilar Executável WEB (Navegador com Static e Templates)
+      run: |
+        pyinstaller --onefile \
+          --add-data "templates:templates" \
+          --add-data "static:static" \
+          --name ${{ matrix.web_name }} web_app.py
+      shell: bash
 
-- name: Disponibilizar Executável TUI (Artefato)
-  uses: actions/upload-artifact@v4
-  with:
-    name: Executavel-TUI-${{ matrix.os }}
-    path: dist/${{ matrix.tui_exe }}
+    - name: Disponibilizar Executável TUI (Artefato)
+      uses: actions/upload-artifact@v4
+      with:
+        name: Executavel-TUI-${{ matrix.os }}
+        path: dist/${{ matrix.tui_exe }}
 
-- name: Disponibilizar Executável WEB (Artefato)
-  uses: actions/upload-artifact@v4
-  with:
-    name: Executavel-WEB-${{ matrix.os }}
-    path: dist/${{ matrix.web_exe }}
+    - name: Disponibilizar Executável WEB (Artefato)
+      uses: actions/upload-artifact@v4
+      with:
+        name: Executavel-WEB-${{ matrix.os }}
+        path: dist/${{ matrix.web_exe }}
