@@ -35,6 +35,30 @@ export interface FileToolsOptions {
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 /**
+ * Order entries by path, comparing plain code units.
+ *
+ * Sorting by path rather than grouping directories first is deliberate: the
+ * result is a **flat** list of full workspace-relative paths, so grouping by
+ * kind would tear the tree apart — every directory ahead of every file, with a
+ * directory's own children somewhere else in the list. Ordering by path is what
+ * keeps `src` next to `src/main.ts`.
+ *
+ * A plain comparison rather than `localeCompare`, also deliberately: the locale
+ * varies between machines, so ordering by it would make the result — and any
+ * test asserting it — depend on where it ran. Case sensitivity is the price,
+ * since uppercase sorts before lowercase. Predictable beats natural here.
+ */
+function compareEntries(
+  left: { readonly path: string },
+  right: { readonly path: string },
+): number {
+  if (left.path === right.path) {
+    return 0;
+  }
+  return left.path < right.path ? -1 : 1;
+}
+
+/**
  * Directories a workspace walk never descends into, matched by name.
  *
  * Without this the explorer is useless on any real repository: `.git/objects`
@@ -249,6 +273,12 @@ export function createFileTools(options: FileToolsOptions): ToolRegistration[] {
       } catch (error) {
         return errorResult(`Failed to list "${path}": ${(error as Error).message}`);
       }
+
+      // `readdir` returns entries in whatever order the filesystem keeps them,
+      // which on ext4 is effectively arbitrary. A tree listed in an order nobody
+      // can predict reads as broken even though it is correct, so the cost is
+      // paid once here rather than by every consumer.
+      entries.sort(compareEntries);
 
       return jsonResult({
         root: toWorkspaceRelative(workspaceRoot, root) || '.',

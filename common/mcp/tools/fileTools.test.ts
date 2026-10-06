@@ -89,6 +89,23 @@ describe('list_directory', () => {
     expect(pathsOf(listing)).toContain('src/main.ts');
   });
 
+  it('orders entries by path, keeping a directory next to its children', async () => {
+    // The failure this guards against is invisible in a tiny fixture and
+    // obvious in a real project: `readdir` order is whatever the filesystem
+    // keeps, so without sorting a hundred files arrive in no order a reader can
+    // follow, and the explorer looks broken while being perfectly correct.
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(join(root, 'README.md'), 'r', 'utf8');
+    await writeFile(join(root, 'src', 'main.ts'), 'm', 'utf8');
+
+    const listing = payload<Listing>(await call('list_directory', { path: '.' }));
+
+    // Uppercase sorts first by code unit, and `src` is a prefix of
+    // `src/main.ts`, so the parent lands immediately above its child.
+    expect(pathsOf(listing)).toEqual(['README.md', 'docs', 'src', 'src/main.ts']);
+  });
+
   it('never descends into version control or dependency trees', async () => {
     // The failure this guards against is not hypothetical: a repository's
     // `.git/objects` holds more files than its source, so an unfiltered walk
