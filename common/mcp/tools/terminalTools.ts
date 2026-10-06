@@ -132,8 +132,8 @@ export function createTerminalTools(options: TerminalToolsOptions): ToolRegistra
       command: z.string().min(1).describe('Shell command, e.g. "npm test" or "gcc -o app main.c".'),
       image: z
         .string()
-        .default(DEFAULT_SANDBOX_IMAGE)
-        .describe('Container image. Defaults to gcc:latest.'),
+        .default(defaultImage)
+        .describe('Container image. Defaults to the configured sandbox image.'),
       network: z
         .enum(['none', 'bridge', 'host'])
         .default('none')

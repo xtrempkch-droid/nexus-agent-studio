@@ -46,7 +46,8 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 | 2 | `package-lock.json` ausente → `npm ci` e `cache: npm` falhariam no CI | Mitigado: o `build.yml` cai para `npm install` e não pede cache. Gere o lockfile com o workflow `bootstrap-lockfile` e **volte a usar `npm ci` + `cache: npm`**. |
 | 3 | `git push` requer credenciais | ✅ **RESOLVIDO.** HTTPS não tinha credencial, mas a chave `~/.ssh/id_ed25519` já está autorizada na conta. O remote `origin` foi apontado para SSH: `git@github.com:xtrempkch-droid/nexus-agent-studio.git`. |
 | 4 | A UI desktop é uma **simulação** no browser | Falta a ponte IPC (Electron/Tauri) entre `variants/desktop` e `common/`. Ver §5. |
-| 5 | `npm install` falhava no CI (run #34, os 6 jobs) | ✅ **CORRIGIDO no código.** Causa: `typescript-eslint@8.71.1` declara `peerDependencies.typescript: ">=4.8.4 <6.1.0"` e eu havia declarado `typescript ^7.0.2` → `ERESOLVE`, exit 1 no passo de install, com `lint`/`typecheck`/`test`/`build` **skipped**. Agora `typescript: "~6.0.2"`. Falta o CI confirmar. |
+| 5 | `npm install` falhava no CI (run #34, os 6 jobs) | ✅ **RESOLVIDO e confirmado.** Causa: `typescript-eslint@8.71.1` declara `peerDependencies.typescript: ">=4.8.4 <6.1.0"` e eu havia declarado `typescript ^7.0.2` → `ERESOLVE`, exit 1 no passo de install, com `lint`/`typecheck`/`test`/`build` **skipped**. Agora `typescript: "~6.0.2"` e o install passa. |
+| 6 | `npm run lint` acusou 1 erro (run 37401758113) | ✅ **CORRIGIDO.** `defaultImage` era declarado mas ignorado em `createTerminalTools` — o schema fixava `DEFAULT_SANDBOX_IMAGE`, então `CoreOptions.sandboxImage` só afetava o `TerminalRunner` e **não** a tool `run_terminal_command`. Agora o schema usa `defaultImage`. Era bug real, não só ruído de lint. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -74,11 +75,15 @@ node dist/core.mjs      # core como MCP server stdio
 
 1. Rodar o CI e **corrigir o que ele apontar** (é a primeira execução real do
    TypeScript contra os tipos do SDK).
-2. **Ponto de maior incerteza:** em `common/mcp/server.ts`, o `build()` passa
+2. **Ponto de maior incerteza (typecheck):** em `common/mcp/server.ts`, `build()` passa
    `inputSchema: tool.definition.inputSchema` (tipado como `z.ZodType`) para
-   `McpServer.registerTool`, com a opção de config montada separadamente e o
-   handler convertido via `as never`. Se o `typecheck` reclamar, ajuste à
-   assinatura real do SDK — **não invente** a assinatura, confira a doc.
+   `McpServer.registerTool`. A assinatura real do SDK (v2, verificada no fonte
+   `packages/server/src/server/mcp.ts`) aceita
+   `inputSchema?: StandardSchemaWithJSON | ZodRawShape` e
+   `cb: ToolCallback<StandardSchemaWithJSON | undefined> | LegacyToolCallback<ZodRawShape>`.
+   O handler já passa por um cast `as never` (válido para essa união), mas **se
+   `z.ZodType` não for atribuível a `StandardSchemaWithJSON` o typecheck vai falhar
+   aqui** — é o primeiro lugar a olhar. Não invente a assinatura: confira a doc.
 3. Gerar o `package-lock.json` e endurecer o CI de volta (`npm ci` + cache).
 4. Construir a ponte IPC (`variants/desktop` ↔ `common/`) — hoje a UI roda uma
    simulação determinística marcada em `variants/desktop/src/App.tsx`.
