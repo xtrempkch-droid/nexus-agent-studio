@@ -433,8 +433,11 @@ mod tests {
             "NEXUS_CORE_WORKSPACE must name the workspace root holding dist/core.mjs",
         );
 
-        let config = CoreConfig::for_workspace(Path::new(&workspace));
-        let child = spawn_core(&config, Path::new(&workspace)).expect("failed to spawn the core");
+        // In the CI checkout the repository is both the app root and the project
+        // being edited, so a single path serves for both.
+        let app_root = Path::new(&workspace);
+        let config = CoreConfig::for_app_root(app_root);
+        let child = spawn_core(&config, app_root).expect("failed to spawn the core");
 
         let mut session = CoreSession::start(child).expect("failed to attach to the core");
 
