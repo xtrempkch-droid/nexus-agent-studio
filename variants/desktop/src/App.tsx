@@ -26,13 +26,15 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { InlineHint } from './lib/coreTypes.ts';
 import { describeCore, isShellAvailable, workspaceInfo } from './lib/shell.ts';
-import { listDirectory, readFile, runInSandbox, writeFile } from './lib/coreClient.ts';
-import { AgentChat, type ChatMessage, type PendingApproval } from './components/AgentChat.tsx';
 import {
-  FileExplorer,
-  type FileStatus,
-  type WorkspaceFile,
-} from './components/FileExplorer.tsx';
+  listDirectory,
+  readFile,
+  runInSandbox,
+  writeFile,
+  type DirectoryEntry,
+} from './lib/coreClient.ts';
+import { AgentChat, type ChatMessage, type PendingApproval } from './components/AgentChat.tsx';
+import { FileExplorer, parentOf, type FileStatus } from './components/FileExplorer.tsx';
 import { HeaderBar, type AgentMode, type ModelOption } from './components/HeaderBar.tsx';
 import { Icon } from './components/Icon.tsx';
 import { TerminalOutput, type TerminalLine } from './components/TerminalOutput.tsx';
@@ -41,7 +43,11 @@ import type { SandboxStatus } from './components/StatusBadge.tsx';
 /** Which bottom panel is visible. */
 type BottomTab = 'agent' | 'shell' | 'diff';
 
-interface FileRecord extends WorkspaceFile {
+interface FileRecord {
+  readonly path: string;
+  readonly status: FileStatus;
+  /** Kept from the design preview; the explorer now derives icons from the path. */
+  readonly language?: string;
   readonly content: string;
 }
 
@@ -122,36 +128,6 @@ const PREVIEW_FILES: readonly FileRecord[] = [
   },
 ];
 
-/**
- * Guess a language id from a path, used only to pick the explorer's icon.
- *
- * A short table rather than a dependency on purpose: a wrong guess costs a wrong
- * glyph, not a wrong edit.
- */
-function languageForPath(path: string): string {
-  const dot = path.lastIndexOf('.');
-  const extension = dot === -1 ? '' : path.slice(dot + 1).toLowerCase();
-
-  switch (extension) {
-    case 'ts':
-    case 'tsx':
-      return 'typescript';
-    case 'js':
-    case 'jsx':
-    case 'mjs':
-    case 'cjs':
-      return 'javascript';
-    case 'py':
-      return 'python';
-    case 'md':
-      return 'markdown';
-    case 'rs':
-      return 'rust';
-    default:
-      return 'text';
-  }
-}
-
 function uid(): string {
   return globalThis.crypto.randomUUID();
 }
@@ -169,6 +145,8 @@ export default function App() {
   const [files, setFiles] = useState<readonly FileRecord[]>(PREVIEW_FILES);
   const [activeFile, setActiveFile] = useState<string>('src/main.py');
   const [openTabs, setOpenTabs] = useState<readonly string[]>(['src/main.py']);
+  const [entries, setEntries] = useState<readonly DirectoryEntry[]>([]);
+  const [currentDir, setCurrentDir] = useState<string>('.');
 
   const [mode, setMode] = useState<AgentMode>('assisted');
   const [approveAll, setApproveAll] = useState(false);
@@ -226,6 +204,15 @@ export default function App() {
     return (slash === -1 ? trimmed : trimmed.slice(slash + 1)).toUpperCase();
   }, [workspaceLabel]);
 
+  /** Per-file statuses, flattened for the explorer's file rows. */
+  const statuses = useMemo(() => {
+    const map: Record<string, FileStatus> = {};
+    for (const file of files) {
+      map[file.path] = file.status;
+    }
+    return map;
+  }, [files]);
+
   const appendTerminal = useCallback((...entries: TerminalLine[]) => {
     setTerminalLines((previous) => [...previous, ...entries]);
   }, []);
@@ -250,6 +237,15 @@ export default function App() {
     (path: string) => {
       setActiveFile(path);
       setOpenTabs((previous) => (previous.includes(path) ? previous : [...previous, path]));
+
+      // The explorer lists one directory at a time, so a freshly opened file may
+      // not be in `files` yet. Give it a record first, or the editor has nowhere
+      // to put the content it is about to read.
+      setFiles((previous) =>
+        previous.some((file) => file.path === path)
+          ? previous
+          : [...previous, { path, status: 'normal' as const, content: '' }],
+      );
 
       if (!isShellAvailable()) {
         return;
@@ -289,6 +285,34 @@ export default function App() {
       });
   }, [activeFile, appendTerminal, files, updateFile]);
 
+  /** List one directory and make it the explorer's current view. */
+  const loadDirectory = useCallback(
+    async (dir: string) => {
+      setCurrentDir(dir);
+      if (!isShellAvailable()) {
+        return;
+      }
+      try {
+        const listing = await listDirectory(dir, 1);
+        setEntries(listing.entries);
+      } catch (error) {
+        appendTerminal(line('stderr', `Falha ao listar "${dir}": ${String(error)}`));
+      }
+    },
+    [appendTerminal],
+  );
+
+  const openDirectory = useCallback(
+    (path: string) => {
+      void loadDirectory(path);
+    },
+    [loadDirectory],
+  );
+
+  const navigateUp = useCallback(() => {
+    void loadDirectory(parentOf(currentDir));
+  }, [currentDir, loadDirectory]);
+
   // Connect to the real core when running inside the desktop shell.
   //
   // In a plain browser nothing is injected, so the badge keeps saying
@@ -316,43 +340,9 @@ export default function App() {
         return;
       }
       setWorkspaceLabel(workspace);
+      appendTerminal(line('system', `Workspace: ${workspace}`));
 
-      const listing = await listDirectory('.', 4);
-      if (cancelled) {
-        return;
-      }
-
-      const opened = listing.entries.filter((entry) => entry.type === 'file');
-      setFiles(
-        opened.map((entry) => ({
-          path: entry.path,
-          status: 'normal' as const,
-          language: languageForPath(entry.path),
-          content: '',
-        })),
-      );
-      appendTerminal(
-        line(
-          'system',
-          `Workspace: ${workspace} — ${String(opened.length)} arquivo(s)${
-            listing.truncated ? ' (listagem truncada)' : ''
-          }`,
-        ),
-      );
-
-      const first = opened[0];
-      if (first === undefined) {
-        setActiveFile('');
-        setOpenTabs([]);
-        return;
-      }
-
-      setActiveFile(first.path);
-      setOpenTabs([first.path]);
-      const contents = await readFile(first.path);
-      if (!cancelled) {
-        updateFile(first.path, contents.content, 'normal');
-      }
+      await loadDirectory('.');
     };
 
     void connect().catch((error: unknown) => {
@@ -367,7 +357,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appendTerminal, updateFile]);
+  }, [appendTerminal, loadDirectory]);
 
   /**
    * Run the tests in the core's sandbox.
@@ -561,15 +551,22 @@ export default function App() {
 
       <div className="relative flex flex-1 overflow-hidden">
         <FileExplorer
-          files={files}
+          entries={entries}
           activeFile={activeFile}
+          currentDir={currentDir}
           hints={hints}
+          statuses={statuses}
           rootLabel={workspaceName}
-          onSelect={selectFile}
+          onOpenFile={selectFile}
+          onOpenDirectory={openDirectory}
+          onNavigateUp={navigateUp}
           onNewFile={() =>
-            appendMessage({ role: 'system', text: 'Criação de arquivo disponível no app empacotado.' })
+            appendMessage({ role: 'system', text: 'Criação de arquivo ainda não está disponível.' })
           }
-          onRefresh={clearHints}
+          onRefresh={() => {
+            clearHints();
+            void loadDirectory(currentDir);
+          }}
         />
 
         <main className="flex min-w-0 flex-1 flex-col border-r border-slate-800/80 bg-ide-editor">
