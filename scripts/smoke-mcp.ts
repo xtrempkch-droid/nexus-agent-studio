@@ -32,6 +32,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 const EXPECTED_TOOLS: readonly string[] = [
   'get_editor_context',
   'list_directory',
+  'list_models',
   'read_file',
   'run_terminal_command',
   'write_file',

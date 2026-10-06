@@ -15,6 +15,7 @@ import { DockerSandbox, type Sandbox } from './docker/sandbox.ts';
 import { InternalMCPServer } from './mcp/server.ts';
 import { EditorContextStore, createEditorTools } from './mcp/tools/editorTools.ts';
 import { createFileTools } from './mcp/tools/fileTools.ts';
+import { createModelTools } from './mcp/tools/modelTools.ts';
 import {
   DEFAULT_SANDBOX_IMAGE,
   createTerminalRunner,
@@ -95,6 +96,10 @@ export function createCore(options: CoreOptions): NexusCore {
   }
 
   for (const tool of createEditorTools(editorContext)) {
+    server.registerTool(tool.definition, tool.handler);
+  }
+
+  for (const tool of createModelTools()) {
     server.registerTool(tool.definition, tool.handler);
   }
 
