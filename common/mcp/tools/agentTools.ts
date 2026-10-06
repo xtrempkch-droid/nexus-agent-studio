@@ -29,10 +29,18 @@ export function createAgentTools(options: AgentToolsOptions): ToolRegistration[]
     description:
       'Ask the local agent to perform a task in the workspace. It may read and write files, list directories and run terminal commands.',
     inputSchema: z.object({
-      prompt: z.string().min(1).describe('The task for the agent.'),
+      prompt: z.string().optional().describe('The task for the agent (first call only).'),
       model: z.string().min(1).describe('Model name, e.g. deepseek-r1:1.5b.'),
       baseUrl: z.string().default('http://localhost:11434'),
       kind: z.enum(['ollama', 'openai']).default('ollama'),
+      mode: z.enum(['autonomous', 'assisted']).default('autonomous'),
+      history: z
+        .array(z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string() }))
+        .optional(),
+      assistantJson: z.string().optional(),
+      pendingTool: z.string().optional(),
+      pendingArguments: z.unknown().optional(),
+      decision: z.enum(['approve', 'reject']).optional(),
     }),
   };
 
@@ -46,15 +54,53 @@ export function createAgentTools(options: AgentToolsOptions): ToolRegistration[]
     },
   }));
 
-  const handler: AnyToolHandler = async ({ prompt, model, baseUrl, kind }) => {
+  const handler: AnyToolHandler = async (args) => {
+    const {
+      prompt,
+      model,
+      baseUrl,
+      kind,
+      mode,
+      history,
+      assistantJson,
+      pendingTool,
+      pendingArguments,
+      decision,
+    } = args;
+
+    if (typeof prompt !== 'string' && history === undefined) {
+      return errorResult('ask_agent precisa de "prompt" ou de "history" para continuar.');
+    }
+
     try {
-      const turn = await runAgentTurn({ prompt, model, baseUrl, kind, tools: agentTools });
+      const turn = await runAgentTurn({
+        prompt,
+        model,
+        baseUrl,
+        kind,
+        mode,
+        history,
+        assistantJson,
+        pendingTool,
+        pendingArguments,
+        decision,
+        tools: agentTools,
+      });
       return jsonResult({
+        status: turn.status,
         answer: turn.answer,
         toolCalls: turn.steps
           .filter((step) => step.action === 'tool')
           .map((step) => step.text),
         steps: turn.steps.length,
+        ...(turn.status === 'needs_approval'
+          ? {
+              tool: turn.tool,
+              arguments: turn.arguments,
+              history: turn.history,
+              assistantJson: turn.assistantJson,
+            }
+          : {}),
       });
     } catch (error) {
       return errorResult(`Falha ao executar o agente: ${(error as Error).message}`);

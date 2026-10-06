@@ -134,4 +134,101 @@ describe('runAgentTurn', () => {
     expect(calls).toContain('read_file(threw)');
     expect(turn.answer).toBe('ok');
   });
+
+  it('pauses in assisted mode before a dangerous tool instead of executing it', async () => {
+    const calls: string[] = [];
+
+    const turn = await runAgentTurn({
+      ...BASE,
+      mode: 'assisted',
+      tools: [tool('write_file', 'escrito', calls)],
+      fetcher: scriptedFetcher('{"tool":"write_file","arguments":{"path":"a.ts","content":"x"}}'),
+    });
+
+    expect(turn.status).toBe('needs_approval');
+    expect(turn.tool).toBe('write_file');
+    expect(calls).toEqual([]);
+    expect(turn.history).toBeDefined();
+    expect(turn.assistantJson).toBeDefined();
+  });
+
+  it('does not pause for a read-only tool in assisted mode', async () => {
+    const calls: string[] = [];
+
+    const turn = await runAgentTurn({
+      ...BASE,
+      mode: 'assisted',
+      tools: [tool('read_file', 'conteúdo', calls)],
+      fetcher: scriptedFetcher('{"tool":"read_file","arguments":{}}', '{"answer":"ok"}'),
+    });
+
+    expect(turn.status).toBe('done');
+    expect(calls).toEqual(['read_file({})']);
+  });
+
+  it('executes the pending tool after approval and continues', async () => {
+    const calls: string[] = [];
+    const paused = await runAgentTurn({
+      ...BASE,
+      mode: 'assisted',
+      tools: [tool('write_file', 'escrito', calls)],
+      fetcher: scriptedFetcher('{"tool":"write_file","arguments":{"path":"a.ts"}}'),
+    });
+
+    const resumed = await runAgentTurn({
+      ...BASE,
+      mode: 'assisted',
+      tools: [tool('write_file', 'escrito', calls)],
+      history: paused.history,
+      assistantJson: paused.assistantJson,
+      pendingTool: paused.tool,
+      pendingArguments: paused.arguments,
+      decision: 'approve',
+      fetcher: scriptedFetcher('{"answer":"feito"}'),
+    });
+
+    expect(resumed.status).toBe('done');
+    expect(resumed.answer).toBe('feito');
+    expect(calls).toEqual(['write_file({"path":"a.ts"})']);
+  });
+
+  it('does not execute after a rejection, and continues', async () => {
+    const calls: string[] = [];
+    const paused = await runAgentTurn({
+      ...BASE,
+      mode: 'assisted',
+      tools: [tool('write_file', 'escrito', calls)],
+      fetcher: scriptedFetcher('{"tool":"write_file","arguments":{}}'),
+    });
+
+    const resumed = await runAgentTurn({
+      ...BASE,
+      mode: 'assisted',
+      tools: [tool('write_file', 'escrito', calls)],
+      history: paused.history,
+      assistantJson: paused.assistantJson,
+      pendingTool: paused.tool,
+      pendingArguments: paused.arguments,
+      decision: 'reject',
+      fetcher: scriptedFetcher('{"answer":"entendido"}'),
+    });
+
+    expect(resumed.answer).toBe('entendido');
+    expect(calls).toEqual([]);
+  });
+
+  it('never pauses in autonomous mode', async () => {
+    const calls: string[] = [];
+
+    const turn = await runAgentTurn({
+      ...BASE,
+      mode: 'autonomous',
+      tools: [tool('write_file', 'escrito', calls)],
+      fetcher: scriptedFetcher('{"tool":"write_file","arguments":{}}', '{"answer":"feito"}'),
+    });
+
+    expect(turn.status).toBe('done');
+    expect(turn.answer).toBe('feito');
+    expect(calls).toEqual(['write_file({})']);
+  });
 });

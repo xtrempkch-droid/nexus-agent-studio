@@ -131,18 +131,33 @@ export function listModels(kind: 'ollama' | 'openai', baseUrl: string): Promise<
 
 /** The `ask_agent` result. */
 export interface AgentTurnResult {
+  readonly status: 'done' | 'needs_approval';
   readonly answer: string;
   readonly toolCalls: readonly string[];
   readonly steps: number;
+  /** Populated when `status` is `needs_approval`; fed back verbatim to resume. */
+  readonly tool?: string;
+  readonly arguments?: unknown;
+  readonly history?: readonly unknown[];
+  readonly assistantJson?: string;
 }
 
-/** Ask the agent to perform a task, using the selected provider and model. */
-export function askAgent(input: {
-  readonly prompt: string;
+/** Inputs for `ask_agent`, including the resume state of a paused turn. */
+export interface AskAgentInput {
+  readonly prompt?: string;
   readonly model: string;
   readonly baseUrl: string;
   readonly kind: 'ollama' | 'openai';
-}): Promise<AgentTurnResult> {
+  readonly mode?: 'autonomous' | 'assisted';
+  readonly history?: readonly unknown[];
+  readonly assistantJson?: string;
+  readonly pendingTool?: string;
+  readonly pendingArguments?: unknown;
+  readonly decision?: 'approve' | 'reject';
+}
+
+/** Ask the agent to perform a task, using the selected provider and model. */
+export function askAgent(input: AskAgentInput): Promise<AgentTurnResult> {
   return callJsonTool<AgentTurnResult>('ask_agent', input);
 }
 

@@ -23,7 +23,7 @@
  * @module variants/desktop/src/App
  */
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { InlineHint } from './lib/coreTypes.ts';
 import { describeCore, isShellAvailable, workspaceInfo } from './lib/shell.ts';
 import {
@@ -33,6 +33,7 @@ import {
   readFile,
   runInSandbox,
   writeFile,
+  type AgentTurnResult,
   type DirectoryEntry,
 } from './lib/coreClient.ts';
 import { AgentChat, type ChatMessage, type PendingApproval } from './components/AgentChat.tsx';
@@ -64,6 +65,26 @@ interface AiProvider {
 const DEFAULT_PROVIDERS: readonly AiProvider[] = [
   { id: 'ollama-local', name: 'Ollama local', baseUrl: 'http://localhost:11434', kind: 'ollama' },
 ];
+
+/** What is needed to resume an agent turn paused for approval. */
+interface AgentResumeState {
+  readonly history: readonly unknown[];
+  readonly assistantJson: string;
+  readonly pendingTool: string;
+  readonly pendingArguments: unknown;
+}
+
+/** Human-readable summary of a pending tool call. */
+function describeApproval(tool: string, args: unknown): { target: string; description: string } {
+  const obj = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
+  const target =
+    typeof obj['path'] === 'string'
+      ? obj['path']
+      : typeof obj['command'] === 'string'
+        ? obj['command']
+        : '';
+  return { target, description: JSON.stringify(obj) };
+}
 
 /**
  * Files shown when there is no core to ask — a plain browser running
@@ -374,64 +395,150 @@ export default function App() {
     };
   }, [appendTerminal, loadDirectory]);
 
+  /** Log the tools a turn used, so the user sees what the agent did. */
+  const logToolCalls = useCallback(
+    (names: readonly string[]) => {
+      if (names.length > 0) {
+        appendTerminal(line('system', `agente chamou: ${names.join(', ')}`));
+      }
+    },
+    [appendTerminal],
+  );
+
+  const finishTurn = useCallback(
+    (turn: AgentTurnResult) => {
+      setBusy(false);
+      if (turn.toolCalls.length > 0) {
+        setDiffText(
+          ['Ferramentas usadas nesta tarefa:', ...turn.toolCalls.map((name) => `  ${name}`)].join(
+            '\n',
+          ),
+        );
+      }
+      appendMessage({ role: 'agent', text: turn.answer });
+    },
+    [appendMessage],
+  );
+
+  const failTurn = useCallback(
+    (error: unknown) => {
+      setBusy(false);
+      appendMessage({ role: 'agent', text: `Falha ao executar o agente: ${String(error)}` });
+    },
+    [appendMessage],
+  );
+
+  const resumeQueue = useRef(new Map<string, AgentResumeState>());
+
   /**
-   * Run one agent turn against the selected provider and model.
+   * Run one agent step, resuming a paused turn when `options.resume` is given.
    *
-   * This replaced the fixed-script chat. The prompt goes to the model, the model
-   * may call the workspace tools through the core, and its answer is what the
-   * user sees. No model selected is an ordinary state, reported plainly instead
-   * of faked.
+   * In assisted mode the core pauses before `write_file` and
+   * `run_terminal_command` and hands the decision back here; approving or
+   * rejecting resumes the same conversation instead of starting over.
    */
+  const runAgent = useCallback(
+    async (options: { prompt?: string; resume?: AgentResumeState; decision?: 'approve' | 'reject' }) => {
+      const provider = activeProvider;
+      const modelName = activeModel;
+
+      if (!isShellAvailable()) {
+        failTurn(new Error('o shell não está disponível'));
+        return;
+      }
+      if (provider === null || modelName === '') {
+        failTurn(new Error('nenhum modelo selecionado — sincronize um provedor nas configurações'));
+        return;
+      }
+
+      const base = { model: modelName, baseUrl: provider.baseUrl, kind: provider.kind };
+      const effectiveMode = mode === 'assisted' && !approveAll ? 'assisted' : 'autonomous';
+
+      try {
+        const turn =
+          options.resume === undefined
+            ? await askAgent({ prompt: options.prompt ?? '', ...base, mode: effectiveMode })
+            : await askAgent({
+                ...base,
+                mode: effectiveMode,
+                history: options.resume.history,
+                assistantJson: options.resume.assistantJson,
+                pendingTool: options.resume.pendingTool,
+                pendingArguments: options.resume.pendingArguments,
+                decision: options.decision,
+              });
+
+        logToolCalls(turn.toolCalls);
+
+        if (turn.status === 'needs_approval') {
+          const id = uid();
+          resumeQueue.current.set(id, {
+            history: turn.history ?? [],
+            assistantJson: turn.assistantJson ?? '',
+            pendingTool: turn.tool ?? '',
+            pendingArguments: turn.arguments,
+          });
+          const summary = describeApproval(turn.tool ?? '', turn.arguments);
+          setPendingApproval({
+            id,
+            tool: turn.tool ?? '',
+            target: summary.target,
+            description: summary.description,
+          });
+          appendMessage({
+            role: 'agent',
+            text: `Quero executar \`${turn.tool}\` — aprovar ou rejeitar?`,
+          });
+          setBusy(false);
+          return;
+        }
+
+        finishTurn(turn);
+      } catch (error) {
+        failTurn(error);
+      }
+    },
+    [activeModel, activeProvider, approveAll, failTurn, finishTurn, logToolCalls, mode],
+  );
+
   const handleSend = useCallback(
     (text: string) => {
       appendMessage({ role: 'user', text });
       setBusy(true);
-
-      const provider = activeProvider;
-      const modelName = activeModel;
-      if (!isShellAvailable() || provider === null || modelName === '') {
-        setBusy(false);
-        appendMessage({
-          role: 'agent',
-          text: 'Nenhum modelo selecionado. Abra as configurações e sincronize um provedor.',
-        });
-        return;
-      }
-
-      void askAgent({ prompt: text, model: modelName, baseUrl: provider.baseUrl, kind: provider.kind })
-        .then((turn) => {
-          setBusy(false);
-          if (turn.toolCalls.length > 0) {
-            appendTerminal(line('system', `agente chamou: ${turn.toolCalls.join(', ')}`));
-            setDiffText(
-              [
-                'Ferramentas usadas nesta tarefa:',
-                ...turn.toolCalls.map((name) => `  ${name}`),
-              ].join('\n'),
-            );
-          }
-          appendMessage({ role: 'agent', text: turn.answer });
-        })
-        .catch((error: unknown) => {
-          setBusy(false);
-          appendMessage({ role: 'agent', text: `Falha ao executar o agente: ${String(error)}` });
-        });
+      void runAgent({ prompt: text });
     },
-    [activeModel, activeProvider, appendMessage, appendTerminal],
+    [appendMessage, runAgent],
   );
 
-  const handleApprove = useCallback(() => {
-    setPendingApproval(null);
-    appendMessage({
-      role: 'system',
-      text: 'Aprovação passo a passo ainda não está disponível: o agente executa a tarefa por inteiro.',
-    });
-  }, [appendMessage]);
+  const handleApprove = useCallback(
+    (id: string) => {
+      const resume = resumeQueue.current.get(id);
+      resumeQueue.current.delete(id);
+      setPendingApproval(null);
+      if (resume === undefined) {
+        return;
+      }
+      appendMessage({ role: 'system', text: 'Aprovado.' });
+      setBusy(true);
+      void runAgent({ resume, decision: 'approve' });
+    },
+    [appendMessage, runAgent],
+  );
 
-  const handleReject = useCallback(() => {
-    setPendingApproval(null);
-    appendMessage({ role: 'system', text: 'Ação rejeitada pelo usuário.' });
-  }, [appendMessage]);
+  const handleReject = useCallback(
+    (id: string) => {
+      const resume = resumeQueue.current.get(id);
+      resumeQueue.current.delete(id);
+      setPendingApproval(null);
+      if (resume === undefined) {
+        return;
+      }
+      appendMessage({ role: 'system', text: 'Rejeitado.' });
+      setBusy(true);
+      void runAgent({ resume, decision: 'reject' });
+    },
+    [appendMessage, runAgent],
+  );
 
   const handleShellSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
