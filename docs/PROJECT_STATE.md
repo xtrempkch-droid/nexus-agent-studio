@@ -29,7 +29,7 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 | --- | --- | --- | --- |
 | 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` |
 | 2 | Core TypeScript (`common/`) | ✅ completo | 🟡 parcial: o servidor MCP é exercitado ponta a ponta; temas e plugins só em teste unitário |
-| 3 | Sandbox Docker + IPC | ✅ completo | ❌ nunca: `run_terminal_command` jamais foi invocado (não há Docker no CI) e a ponte IPC não existe |
+| 3 | Sandbox Docker + IPC | 🟡 em andamento | ❌ o sandbox nunca foi invocado (não há Docker no CI); a **ponte IPC ainda não existe** — só o hospedeiro Tauri (`src-tauri/`) |
 | 4 | Arquitetura de plugins | ✅ completo | 🟡 parcial: registro/unload cobertos por teste, mas **nenhum plugin real foi carregado** |
 | 5 | Configuração e build | ✅ completo | 🟡 core sim, UI não: `dist/core.mjs` é construído e executado; `npm run build:desktop` **não roda no CI** |
 
@@ -67,6 +67,8 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 | 7 | `npm run typecheck`: falta de declaração de módulo (run 37402173198) | ✅ **CORRIGIDO.** `variants/desktop/src/main.tsx:10` → `Cannot find module or type declarations for side-effect import of './styles/theme.css'`. Causa: **não existia nenhum `.d.ts` no projeto**, então o import de CSS não resolvia. Criado `variants/desktop/src/vite-env.d.ts` com `/// <reference types="vite/client" />` — o `client.d.ts` do Vite declara `declare module '*.css' {}` (verificado em `vite@8.3.2`, cujo `package.json` expõe `exports["./client"] = { types: "./client.d.ts" }`). `.d.ts` é ignorado pelo ESLint, então a triple-slash reference não viola nenhuma regra. |
 | 8 | `npm run typecheck`: 5 erros em `common/mcp/server.test.ts` | ✅ **CORRIGIDO.** Linhas 87/92/96/111/116, todos a mesma causa: os dois `const handler` extraídos perdiam a **tipagem contextual**, então `type: 'text'` **alargava para `string`** e o retorno deixava de ser atribuível a `TextContentBlock`. Os arrows inline (linhas 25/63/75) **não** erravam — prova de que a causa era o literal solto, não a API. Corrigido usando o helper `textResult` que já era exportado. **Os tipos da lib estavam corretos; o teste é que estava.** |
 | 9 | `build()` e `serveStdio()` sem cobertura de runtime | ✅ **RESOLVIDO.** Nenhum dos 8 arquivos de teste chamava `build()` nem `serveStdio()` — as duas apareciam apenas no bootstrap (`common/index.ts`) e em comentários. Ou seja, a fronteira com o SDK v2, a parte mais arriscada do projeto, **nunca havia executado**: o typecheck provava só que os tipos encaixam, não que o SDK converte os schemas Zod em runtime. Criado `scripts/smoke-mcp.ts` + o passo `Smoke test (MCP over stdio)` no CI (depois do build, pois sobe `dist/core.mjs`). Run 37404728248: verde nos 6 jobs, inclusive Windows. |
+| 10 | A UI nunca era empacotada pelo Vite | ✅ **CORRIGIDO no código.** `npm run build:desktop` não rodava em lugar nenhum: o `tsc` aprovava a UI, mas aprovar tipos não diz nada sobre o Vite resolver `@tailwindcss/vite`, `@vitejs/plugin-react`, o `@theme` do Tailwind v4 e o alias `@core`. Adicionado o passo `Build (desktop)` (commit `29b9e0a`). **Resultado do run ainda não conferido** — a API do GitHub estourou o limite de 60 req/h sem autenticação, e o badge público não expôs o status. |
+| 11 | O host desktop não existia (ponte IPC sem lugar para viver) | 🟡 **HOSPEDEIRO PRONTO, ponte pendente.** Criado `src-tauri/` (`Cargo.toml`, `tauri.conf.json`, `capabilities/default.json`, ícone, um único comando `shell_info`) sob um workflow `tauri` **separado**, que roda `cargo check` só quando `src-tauri/**` ou `variants/desktop/**` mudam — compilar Tauri leva minutos e não deve travar o loop rápido do TypeScript. O passo captura a saída do cargo e a reemite como `::error::`, porque log bruto do Actions exige autenticação e anotação não: sem isso, uma falha do Rust seria só um X vermelho. **Resultado do run ainda não conferido.** |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -117,14 +119,16 @@ node dist/core.mjs      # core como MCP server stdio
    artefato veio do workflow `bootstrap-lockfile`, foi extraído, **validado contra o
    `package.json`** e só então commitado — commitar um lockfile defasado quebraria o
    `npm ci` justamente no passo que se queria endurecer.
-5. ⚠️ **Próximo ponto cego: a UI nunca foi empacotada pelo bundler de produção.**
-   `npm run build:desktop` **não está no CI**, então o Vite (com `@tailwindcss/vite`,
-   `@vitejs/plugin-react` e o alias `@core`) jamais compilou a interface. O `tsc` a
-   aprova, mas aprovar tipos não é o mesmo que o Vite resolver os plugins, o `@theme`
-   do Tailwind v4 e os assets. Passo barato: um passo `Build (desktop)` rodando
-   `npm run build:desktop`.
-6. Construir a ponte IPC (`variants/desktop` ↔ `common/`) — hoje a UI roda uma
-   simulação determinística marcada em `variants/desktop/src/App.tsx`.
+5. ✅ **`Build (desktop)` no CI** (commit `29b9e0a`): o Vite agora empacota a UI de
+   verdade. Resultado do run ainda não conferido (§3, linha 10).
+6. 🟡 **Hospedeiro Tauri criado; a ponte IPC é o próximo passo.** `src-tauri/` tem
+   `Cargo.toml`, `tauri.conf.json`, capabilities e um único comando (`shell_info`), e o
+   workflow `tauri` roda `cargo check` (resultado ainda não conferido). O passo seguinte
+   é decidir **como o shell Rust alcança o core TypeScript**: o caminho natural é
+   **sidecar** — o Rust sobe `node dist/core.mjs` e fala MCP por stdio, o que preserva o
+   core headless (`common/`) em vez de reimplementá-lo em Rust, ao custo de exigir um
+   runtime Node na máquina (ou de empacotar um). Depois disso, trocar a simulação de
+   `variants/desktop/src/App.tsx` por chamadas reais ao shell.
 7. Avaliar se o Monaco volta a ser usado (foi trocado por `<textarea>` para não
    adicionar dependência não verificada).
 8. ✅ **Aviso de depreciação resolvido.** `actions/checkout@v4`,

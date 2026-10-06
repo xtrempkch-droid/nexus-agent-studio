@@ -32,6 +32,8 @@ completa de correções está em `docs/PROJECT_STATE.md` §6.
 | `typescript` | `~6.0.2` | **NÃO suba para 7.x** — `typescript-eslint@8` exige `>=4.8.4 <6.1.0`; TS 7 faz o `npm install` falhar com ERESOLVE. `baseUrl` é proibido (deprecado) |
 | `vite` / `vitest` / `eslint` | `^8.3.2` / `^5.0.3` / `^10.12.0` | |
 | Node.js | `>=22` | CI: 22 (LTS), 24 (Active LTS) |
+| `tauri` (crate Rust) | `"2"` → **2.12.1** | faixa major-only de propósito: `tauri-build` é versionado **à parte** (2.7.1 no momento), então fixar os dois em versões exatas arriscaria um par incompatível. O Cargo rejeita combinações inválidas em vez de compilar algo errado. |
+| `@tauri-apps/cli` / `@tauri-apps/api` | **2.12.1** | **Ainda não entram como devDependency:** adicionar uma dep invalida o `package-lock.json` e faz o `npm ci` falhar. Adicione junto com um lockfile regenerado (workflow `bootstrap-lockfile`). O `cargo check` atual não precisa do CLI. |
 
 ### Padrões obrigatórios do MCP v2
 
