@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Baseline permissions for the main window. Without a capability the webview has no access to the IPC layer at all, so this is what allows the frontend to call the shell's commands.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

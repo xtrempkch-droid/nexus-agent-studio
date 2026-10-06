@@ -1,0 +1,22 @@
+[package]
+name = "nexus-agent-studio-shell"
+version = "0.1.0"
+edition = "2021"
+description = "Tauri desktop shell for NexusAgent Studio"
+license = "Apache-2.0"
+publish = false
+
+[build-dependencies]
+# Major-only range on purpose. `tauri` and `tauri-build` are versioned
+# independently (2.12.1 and 2.7.1 at the time of writing), so pinning both to
+# exact versions would risk an incompatible pair. Letting Cargo resolve inside
+# 2.x is what the official templates do, and Cargo itself rejects an
+# incompatible combination instead of silently building something wrong.
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Deliberately the only runtime dependency. The shell does not reimplement any
+# core logic: the headless core in `common/` is reached over the MCP transport.
+# Keeping the crate graph small keeps `cargo check` fast and keeps the surface I
+# have to verify small too.
+tauri = { version = "2", features = [] }

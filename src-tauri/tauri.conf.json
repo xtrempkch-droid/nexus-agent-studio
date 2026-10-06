@@ -1,0 +1,31 @@
+{
+  "productName": "NexusAgent Studio",
+  "version": "0.1.0",
+  "identifier": "dev.nexusagent.studio",
+  "build": {
+    "frontendDist": "../dist/desktop",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev:desktop",
+    "beforeBuildCommand": "npm run build:desktop"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NexusAgent Studio",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": ["icons/icon.png"]
+  }
+}
