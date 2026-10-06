@@ -139,16 +139,46 @@ mod tests {
         assert_eq!(command.get_current_dir(), Some(Path::new("/ws")));
     }
 
-    /// All three streams must be configured explicitly. Asserting `is_some`
-    /// rather than inspecting the `Stdio` value is deliberate: `Stdio` does not
-    /// expose which kind it is, and its `Debug` output is an implementation
-    /// detail that is not part of any stability guarantee.
+    /// Proves stdin and stderr are both wired to pipes by driving a real child:
+    /// the script reads one line from stdin and echoes it to stderr.
+    ///
+    /// This has to be behavioural. `Command` exposes `get_program`, `get_args`
+    /// and `get_current_dir`, but **no** accessor for the configured streams, so
+    /// there is no way to assert on them directly.
+    #[cfg(unix)]
     #[test]
-    fn core_command_configures_stdin_stdout_and_stderr() {
-        let command = core_command(&config(), Path::new("/ws"));
-        assert!(command.get_stdin().is_some(), "stdin must be configured");
-        assert!(command.get_stdout().is_some(), "stdout must be configured");
-        assert!(command.get_stderr().is_some(), "stderr must be configured");
+    fn spawn_core_pipes_stdin_and_stderr() {
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join("nexus-agent-studio-bridge-stdin-test");
+        std::fs::create_dir_all(&dir).expect("failed to create the temp dir");
+        let script = dir.join("echo-to-stderr.sh");
+        std::fs::write(&script, "read line\nprintf '%s\\n' \"$line\" >&2\n")
+            .expect("failed to write the script");
+
+        let config = CoreConfig {
+            runtime: PathBuf::from("sh"),
+            entry: script,
+        };
+
+        let mut child = spawn_core(&config, &dir).expect("failed to spawn sh");
+
+        // Taking the handle and dropping it closes the pipe, which is what lets
+        // the child's `read` return at all.
+        child
+            .stdin
+            .take()
+            .expect("stdin should be piped")
+            .write_all(b"ping\n")
+            .expect("failed to write to the child stdin");
+
+        let line = wait_for_boot(&mut child, Duration::from_secs(10))
+            .expect("stderr should be piped and readable");
+        assert_eq!(line, "ping");
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Behavioural proof that stdout really is captured, rather than an
