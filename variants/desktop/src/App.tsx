@@ -29,6 +29,7 @@ import {
   describeCore,
   isShellAvailable,
   onAgentStream,
+  pickFile,
   pickWorkspace,
   setWorkspace,
   workspaceInfo,
@@ -506,6 +507,38 @@ export default function App() {
     [loadDirectory],
   );
 
+  /**
+   * Create an empty file in the current directory and open it.
+   *
+   * Named by the user through the explorer's inline prompt; the path is built
+   * from the directory the explorer is showing, so the file lands where the user
+   * is looking rather than at the workspace root.
+   */
+  const createFile = useCallback(
+    (name: string) => {
+      const trimmed = name.trim();
+      if (trimmed === '') {
+        return;
+      }
+      if (!isShellAvailable()) {
+        appendTerminal(line('stderr', 'O shell não está disponível — não é possível criar arquivos.'));
+        return;
+      }
+      const path = currentDir === '.' ? trimmed : `${currentDir}/${trimmed}`;
+
+      void writeFile(path, '')
+        .then(() => {
+          appendTerminal(line('system', `CREATE: ${path}`));
+          void loadDirectory(currentDir);
+          selectFile(path);
+        })
+        .catch((error: unknown) => {
+          appendTerminal(line('stderr', `Falha ao criar ${path}: ${String(error)}`));
+        });
+    },
+    [appendTerminal, currentDir, loadDirectory, selectFile],
+  );
+
   const navigateUp = useCallback(() => {
     void loadDirectory(parentOf(currentDir));
   }, [currentDir, loadDirectory]);
@@ -556,6 +589,27 @@ export default function App() {
       appendTerminal(line('stderr', `Falha ao abrir projeto: ${String(error)}`));
     }
   }, [appendTerminal, applyWorkspace]);
+
+  /**
+   * Open the native file picker. The shell re-points the workspace at the file's
+   * folder, so the file lands in the explorer and opens in the editor.
+   */
+  const openFile = useCallback(async () => {
+    if (!isShellAvailable()) {
+      appendTerminal(line('stderr', 'O shell não está disponível — abra um arquivo pelo sistema.'));
+      return;
+    }
+    try {
+      const result = await pickFile();
+      if (result !== null) {
+        const [workspace, file] = result;
+        await applyWorkspace(workspace);
+        selectFile(file);
+      }
+    } catch (error) {
+      appendTerminal(line('stderr', `Falha ao abrir arquivo: ${String(error)}`));
+    }
+  }, [appendTerminal, applyWorkspace, selectFile]);
 
   /** Switch to a workspace typed by hand in the settings panel. */
   const applyManualWorkspace = useCallback(async () => {
@@ -918,6 +972,7 @@ export default function App() {
         connectionDotClass={connectionDotClass}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenWorkspace={() => void openWorkspace()}
+        onOpenFile={() => void openFile()}
         onCheckDiagnostics={() => checkDiagnostics(activeFile, true)}
       />
 
@@ -932,9 +987,7 @@ export default function App() {
           onOpenFile={selectFile}
           onOpenDirectory={openDirectory}
           onNavigateUp={navigateUp}
-          onNewFile={() =>
-            appendMessage({ role: 'system', text: 'Criação de arquivo ainda não está disponível.' })
-          }
+          onNewFile={createFile}
           onRefresh={() => {
             clearHints();
             void loadDirectory(currentDir);
@@ -1069,9 +1122,9 @@ export default function App() {
       </div>
 
       {settingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
-          <div className="w-full max-w-md space-y-4 rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-xl border border-slate-800 bg-slate-900 shadow-2xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-800 p-5 pb-3">
               <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
                 <Icon name="settings" className="h-4 w-4 text-indigo-400" />
                 <span>Configurações do Servidor Local &amp; IA</span>
@@ -1086,7 +1139,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <div className="scrollbar-ide min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4 text-xs">
               <div>
                 <label htmlFor="workspace-path" className="mb-1 block font-medium text-slate-300">
                   Pasta do projeto:
@@ -1324,7 +1377,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex justify-end border-t border-slate-800 pt-3">
+            <div className="flex shrink-0 justify-end border-t border-slate-800 p-5 pt-3">
               <button
                 type="button"
                 onClick={() => setSettingsOpen(false)}

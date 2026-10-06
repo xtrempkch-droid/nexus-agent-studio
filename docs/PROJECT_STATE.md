@@ -297,6 +297,21 @@ node dist/core.mjs      # core como MCP server stdio
     servidor LSP filho real, faz refresh de um arquivo e recebe o diagnóstico com
     linha 1-based e `source: lsp:<id>` — `LSP E2E OK`. O CI cobre o resto (build +
     tauri com a lista de 10 tools atualizada).
+15. ✅ **Ajustes de UI/UX após rodar o app executável.** Resultados de usar o
+    programa compilado:
+    - **Modal de configurações crescia além da tela** quando a lista de modelos
+      aparecia, empurrando "Salvar e Fechar" para fora. Agora é uma coluna flex
+      com `max-h-[90vh]`, corpo rolável (`overflow-y-auto`) e rodapé fixo.
+    - **"Abrir" só abria pastas.** Agora há dois botões explícitos, **"Pasta"** e
+      **"Arquivo"**, e um comando `pick_file` no shell: ao escolher um arquivo, o
+      workspace é reapontado para a pasta dele e o arquivo volta como caminho
+      relativo — abrir um arquivo solto virou "abrir a pasta dele e focar o arquivo".
+    - **"Novo arquivo" não fazia nada.** O `+` do explorador abre um prompt inline
+      de nome e cria o arquivo no diretório em exibição (via `write_file`).
+    - **Espera longa parecia travamento.** O chat mostra um spinner com **segundos
+      decorridos** enquanto aguarda, e o teto de tempo por chamada de tool no shell
+      subiu de **120 s → 600 s** — um modelo local lento vira espera, não erro de
+      timeout. (O `run_terminal_command` mantém o próprio `timeoutMs`.)
 
 ---
 

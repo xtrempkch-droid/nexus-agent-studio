@@ -7,8 +7,8 @@
 //! The shell owns one **long-lived** core session — started lazily by
 //! `ShellState::with_core`, restarted if the process died — and exposes it to the
 //! webview through a small command surface: `shell_info`, `workspace_info`,
-//! `core_boot_probe`, `core_handshake`, `call_core_tool`, `set_workspace` and
-//! `pick_workspace`.
+//! `core_boot_probe`, `core_handshake`, `call_core_tool`, `set_workspace`,
+//! `pick_workspace` and `pick_file`.
 //!
 //! Two roots are kept deliberately separate: `app_root` is where the bundle
 //! lives and the core is found, `workspace_root` is the project the core edits
@@ -45,8 +45,11 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long a single tool call may take.
 ///
 /// Generous next to the handshake on purpose: `run_terminal_command` waits on a
-/// container, which is slow by nature.
-const TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+/// container, and a task turn waits on a local model that can be slow on CPU.
+/// Ten minutes is a ceiling for "the model is still thinking", not a target — a
+/// shorter value turns a slow local model into a spurious timeout failure the
+/// user reads as a freeze.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// State shared with the commands.
 struct ShellState {
@@ -295,6 +298,47 @@ async fn pick_workspace(app: tauri::AppHandle) -> Result<Option<String>, String>
     Ok(Some(state.switch_workspace(path)?))
 }
 
+/// Open the native **file** picker and switch the editor to the file's folder.
+///
+/// The editor edits a whole project directory, not a loose file, so choosing a
+/// file re-points the workspace at its parent and hands back the file name (which
+/// is already workspace-relative). This is what makes "open a file" possible
+/// without inventing a second, workspace-less editing mode.
+///
+/// Resolves to `(workspace, file)` or `None` when the dialog was cancelled.
+#[tauri::command]
+async fn pick_file(app: tauri::AppHandle) -> Result<Option<(String, String)>, String> {
+    let (sender, receiver) = mpsc::channel::<Option<FilePath>>();
+
+    app.dialog()
+        .file()
+        .set_title("Abrir arquivo")
+        .pick_file(move |file_path| {
+            let _ = sender.send(file_path);
+        });
+
+    let Some(file_path) = receiver.recv().ok().flatten() else {
+        return Ok(None);
+    };
+
+    let path = file_path
+        .into_path()
+        .map_err(|error| format!("caminho inválido: {error}"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "o arquivo não tem pasta pai".to_string())?
+        .to_path_buf();
+    let name = path
+        .file_name()
+        .ok_or_else(|| "nome de arquivo inválido".to_string())?
+        .to_string_lossy()
+        .into_owned();
+
+    let state = app.state::<ShellState>();
+    let workspace = state.switch_workspace(parent)?;
+    Ok(Some((workspace, name)))
+}
+
 fn main() {
     let app_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let workspace_root = workspace_root_from_environment().unwrap_or_else(|| app_root.clone());
@@ -315,7 +359,8 @@ fn main() {
             core_handshake,
             call_core_tool,
             set_workspace,
-            pick_workspace
+            pick_workspace,
+            pick_file
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
