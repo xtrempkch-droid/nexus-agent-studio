@@ -312,6 +312,20 @@ node dist/core.mjs      # core como MCP server stdio
       decorridos** enquanto aguarda, e o teto de tempo por chamada de tool no shell
       subiu de **120 s → 600 s** — um modelo local lento vira espera, não erro de
       timeout. (O `run_terminal_command` mantém o próprio `timeoutMs`.)
+16. ✅ **Janela "não está respondendo" no Linux resolvida.** Causa raiz: no Tauri,
+    um comando **síncrono** roda na **main thread**, e `call_core_tool` segurava a
+    chamada por todo o tempo do modelo — minutos num modelo local. Isso congela o
+    loop do WebKitGTK, e o ambiente gráfico rotula a janela como "not responding".
+    (Fonte: doc oficial do Tauri v2 — *"Asynchronous commands are preferred… If
+    your command needs to run asynchronously, simply declare it as async"*.)
+    `call_core_tool`, `core_handshake`, `core_boot_probe` e `set_workspace` agora
+    são `async` e rodam o trabalho bloqueante via
+    `tauri::async_runtime::spawn_blocking` (API confirmada no fonte do Tauri), então
+    a main thread fica livre e a espera longa não congela mais a janela. Também
+    adicionado um botão **"Salvar"** visível na barra de abas do editor (antes só
+    havia Ctrl+S). **Lição para futuras fatias:** no shell, qualquer comando que
+    faça I/O bloqueante (stdio do core, espera de diálogo, shutdown) tem de ser
+    `async` + `spawn_blocking`; comando síncrono é só para trabalho instantâneo.
 
 ---
 
