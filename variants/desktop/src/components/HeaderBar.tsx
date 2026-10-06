@@ -90,21 +90,26 @@ export function HeaderBar({
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/90 p-1">
           <Icon name="cpu" className="ml-1.5 h-3.5 w-3.5 text-indigo-400" />
-          <label className="sr-only" htmlFor="model-select">
+          <label className="sr-only" htmlFor="model-input">
             Modelo
           </label>
-          <select
-            id="model-select"
+          <input
+            id="model-input"
+            list="model-suggestions"
             value={selectedModel}
             onChange={(event) => onModelChange(event.target.value)}
-            className="cursor-pointer bg-transparent pr-2 font-mono text-xs text-slate-200 focus:outline-none"
-          >
+            placeholder="modelo (ex: qwen2.5:7b)"
+            spellCheck={false}
+            autoComplete="off"
+            className="w-44 bg-transparent font-mono text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+          />
+          <datalist id="model-suggestions">
             {models.map((model) => (
-              <option key={model.id} value={model.id} className="bg-slate-900">
+              <option key={model.id} value={model.id}>
                 {model.label}
               </option>
             ))}
-          </select>
+          </datalist>
         </div>
 
         <div className="flex items-center rounded-lg border border-slate-800 bg-slate-900 p-1">
