@@ -5,6 +5,8 @@
  * isolation posture. The container:
  *
  * - mounts the workspace read/write at `/workspace` and sets it as the CWD;
+ * - runs as the **caller's own user**, not as root, so the workspace stays
+ *   writable and files it creates belong to the user rather than to `root`;
  * - runs with `--rm` so it can never outlive the call;
  * - drops **all** Linux capabilities (`--cap-drop=ALL`);
  * - forbids privilege escalation (`--security-opt=no-new-privileges`);
@@ -61,8 +63,35 @@ export interface DockerRunOptions {
   readonly cpus?: string;
   /** Kill the container after this many milliseconds. */
   readonly timeoutMs?: number;
+  /**
+   * Set `no_new_privs` on the container process. Defaults to `true`.
+   *
+   * It is the flag that stops a setuid binary inside the image from escalating,
+   * so it stays on unless the host actively rejects it: on some kernels the
+   * combination of `no_new_privs` with the remaining container setup makes
+   * **every** `execve` inside the container fail with `EPERM`
+   * (`exec /bin/sh: operation not permitted`), which turns the sandbox from
+   * hardened into unusable. Turning it off is a real, if narrow, loss of
+   * defence in depth, and it is therefore never inferred — see
+   * `NEXUS_SANDBOX_NO_NEW_PRIVILEGES` in the bootstrap.
+   */
+  readonly noNewPrivileges?: boolean;
   /** Environment variables injected with `-e`. */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * `uid:gid` the container runs as. Defaults to the current user on POSIX.
+   *
+   * Running as root is what makes the sandbox unable to write the project: the
+   * combination of `--cap-drop ALL` with root **removes `CAP_DAC_OVERRIDE`**, so
+   * uid 0 is then just "somebody who is neither the owner nor in the owning
+   * group" of a directory owned by the desktop user — and `gcc -o app main.c`
+   * fails with `Permission denied`. The few places root *can* write (a
+   * world-writable directory) are worse: the files it leaves behind are owned by
+   * `root`, and the user cannot edit or delete their own project any more.
+   *
+   * `'0:0'` is accepted and means root, for an image that genuinely needs it.
+   */
+  readonly user?: string;
   /** Escape hatch for extra `docker run` flags. */
   readonly extraArgs?: readonly string[];
 }
@@ -88,6 +117,30 @@ const DEFAULTS = {
   cpus: '1.0',
   timeoutMs: 120_000,
 } as const;
+
+/**
+ * The CLI this sandbox drives.
+ *
+ * It is the **first element** of the argv, not decoration: the executor spawns
+ * `argv[0]` directly, exactly as `LocalRunner` relies on when it passes
+ * `['sh', '-lc', …]`. An argv that began at `run` was handed to `spawn('run')`
+ * and failed with `ENOENT` before Docker was ever consulted — so every
+ * `run_terminal_command` returned `exitCode: 127` and an empty stdout while the
+ * unit tests, which all inject a fake executor, stayed green.
+ */
+const DOCKER_BIN = 'docker';
+
+/**
+ * Who the container runs as when the caller does not say: the current user.
+ *
+ * Windows has no `uid`, and Docker Desktop maps file ownership itself, so the
+ * flag is omitted there rather than faked as `0:0`.
+ */
+function defaultContainerUser(): string | undefined {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  return uid === undefined || gid === undefined ? undefined : `${String(uid)}:${String(gid)}`;
+}
 
 /**
  * Default executor: spawns the toolchain binary and captures both streams.
@@ -165,12 +218,17 @@ export class DockerSandbox {
   /**
    * Build the exact `docker run` argv for an execution. Exposed separately so it
    * can be asserted in tests and rendered in the UI.
+   *
+   * The returned array is a complete argv: `argv[0]` is the `docker` binary, so
+   * it can be handed to a process runner unchanged. It deliberately does **not**
+   * start at the subcommand.
    */
   public buildArgv(options: DockerRunOptions): string[] {
     const containerId = `nexus-${randomUUID().slice(0, 8)}`;
     const mountTarget = options.containerWorkspaceDir ?? DEFAULTS.containerWorkspaceDir;
 
     const argv: string[] = [
+      DOCKER_BIN,
       'run',
       '--rm',
       '--name',
@@ -185,13 +243,30 @@ export class DockerSandbox {
       options.cpus ?? DEFAULTS.cpus,
       '--cap-drop',
       'ALL',
-      '--security-opt',
-      'no-new-privileges',
       '--network',
       options.network ?? DEFAULTS.network,
     ];
 
-    for (const [key, value] of Object.entries(options.env ?? {})) {
+    if (options.noNewPrivileges !== false) {
+      argv.push('--security-opt', 'no-new-privileges');
+    }
+
+    const user = options.user ?? defaultContainerUser();
+    if (user !== undefined) {
+      argv.push('--user', user);
+    }
+
+    const env: Record<string, string> = { ...options.env };
+    if (user !== undefined && env['HOME'] === undefined) {
+      // The image's `HOME` is `/root`, which the mapped user cannot write, and a
+      // tool that caches there (`npm`, `pip`) would fail for a reason that has
+      // nothing to do with the command. `/tmp` is world-writable inside every
+      // image; pointing `HOME` at the *workspace* instead would litter the
+      // project with cache directories, which is worse.
+      env['HOME'] = '/tmp';
+    }
+
+    for (const [key, value] of Object.entries(env)) {
       argv.push('-e', `${key}=${value}`);
     }
 

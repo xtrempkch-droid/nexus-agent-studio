@@ -145,5 +145,7 @@ current verified set is:
 ## 7. Testing
 
 `vitest` runs against `common/**` and `plugins/**` in Node. The Docker sandbox
-uses an injectable `DockerClient` so tests can assert the exact `docker run`
-argv without a daemon.
+takes an injectable command executor (`CommandExecutor`) so tests can assert the
+exact `docker run` argv without a daemon — which is also why the unit tests could
+not notice that the argv was missing the `docker` binary itself (see
+`docs/PROJECT_STATE.md` §3, item 25).

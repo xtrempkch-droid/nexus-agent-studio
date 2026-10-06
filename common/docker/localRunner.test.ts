@@ -99,6 +99,26 @@ describe('LocalRunner', () => {
     expect(result.timedOut).toBe(true);
   });
 
+  it('runs a real command through the default executor', async () => {
+    // The one test here that spawns a process, and it exists because a fake
+    // executor cannot see the contract that matters: `argv[0]` must be an
+    // executable. `DockerSandbox` broke exactly that — its argv started at
+    // `run`, so the real executor called `spawn('run')` and every sandboxed
+    // command failed with ENOENT. Pinning it on the runner that needs no Docker
+    // keeps the contract covered on every CI runner.
+    const runner = new LocalRunner();
+
+    const result = await runner.run({
+      image: 'ignored',
+      command: 'echo nexus-argv-contract',
+      workspaceDir: process.cwd(),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('nexus-argv-contract');
+    expect(result.stderr).not.toContain('ENOENT');
+  });
+
   it('applies the default timeout when none is given', async () => {
     const { calls, executor } = recordingExecutor();
 

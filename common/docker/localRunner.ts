@@ -58,9 +58,10 @@ export class LocalRunner {
   /**
    * Run `options.command` in `options.workspaceDir`.
    *
-   * `image`, `network`, `memory` and `cpus` are accepted and **ignored**: they
-   * describe a container, and there is no container. Ignoring them is the point
-   * of the type-compatible signature — but the result says so.
+   * `image`, `network`, `memory`, `cpus`, `user` and `noNewPrivileges` are
+   * accepted and **ignored**: they describe a container, and there is no
+   * container. Ignoring them is the point of the type-compatible signature — but
+   * the result says so.
    */
   public async run(options: DockerRunOptions): Promise<DockerRunResult> {
     const startedAt = Date.now();

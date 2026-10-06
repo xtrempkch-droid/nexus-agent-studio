@@ -103,6 +103,19 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   bug da §5 item 16). Use `tauri::State` só em comandos instantâneos; para os
   bloqueantes, receba `tauri::AppHandle` e chame `app.state::<T>()` **dentro** do
   closure `move` do `spawn_blocking` (o `State` pega emprestado do `AppHandle`).
+- **O sandbox tem um contrato de argv, e ele é `argv[0]` = binário.** `DockerSandbox`
+  monta o argv **completo** (`['docker', 'run', …]`) porque o executor spawna
+  `argv[0]` direto — `LocalRunner` passa `['sh', '-lc', …]` pelo mesmo caminho. Um
+  argv começando em `run` vira `spawn('run')` → `ENOENT` → `exitCode: 127` em
+  **toda** chamada, e como os testes usavam executor falso, ninguém via (foi o bug
+  da §3 item 25). Duas regras saem disso: (a) mudança de argv precisa de um teste
+  que **rode um processo de verdade**; (b) novidade testada só com dublê está
+  testada pela metade.
+- **No sandbox, não rode como root.** `--cap-drop ALL` + root remove o
+  `CAP_DAC_OVERRIDE`, então o container **não consegue escrever** numa pasta do
+  usuário (`Permission denied`) e, onde consegue, deixa arquivos com dono `root` no
+  projeto. O run usa `--user <uid>:<gid>` do usuário atual e `HOME=/tmp` (§3 item
+  26). No Windows a flag é omitida: não há uid e o Docker Desktop trata permissões.
 - **A sessão do core é única e serializada.** `ShellState::with_core` segura um
   `Mutex` por toda a chamada, então **duas chamadas de tool nunca rodam juntas**, e
   `ask_agent` segura esse mutex por todo o tempo do modelo (minutos num modelo

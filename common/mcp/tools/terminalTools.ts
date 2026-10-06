@@ -52,6 +52,11 @@ export interface TerminalToolsOptions {
   readonly defaultImage?: string;
   /** Command timeout in milliseconds. */
   readonly defaultTimeoutMs?: number;
+  /**
+   * Set `no_new_privs` on the container. Defaults to `true`; see
+   * {@link DockerRunOptions.noNewPrivileges} for when and why it is turned off.
+   */
+  readonly noNewPrivileges?: boolean;
 }
 
 /**
@@ -109,6 +114,7 @@ export function createTerminalRunner(options: TerminalToolsOptions): TerminalRun
         ...(overrides.memory === undefined ? {} : { memory: overrides.memory }),
         ...(overrides.cpus === undefined ? {} : { cpus: overrides.cpus }),
         timeoutMs: overrides.timeoutMs ?? defaultTimeoutMs,
+        noNewPrivileges: options.noNewPrivileges !== false,
         ...(overrides.env === undefined ? {} : { env: overrides.env }),
         ...(overrides.extraArgs === undefined ? {} : { extraArgs: overrides.extraArgs }),
       }),
@@ -165,6 +171,7 @@ export function createTerminalTools(options: TerminalToolsOptions): ToolRegistra
       workspaceDir: workspaceRoot,
       network,
       timeoutMs,
+      noNewPrivileges: options.noNewPrivileges !== false,
     });
 
     logger.recordContainerRun({

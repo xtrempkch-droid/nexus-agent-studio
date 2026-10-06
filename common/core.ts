@@ -54,6 +54,16 @@ export interface CoreOptions {
   /** Command timeout for the sandbox, in milliseconds. */
   readonly terminalTimeoutMs?: number;
   /**
+   * Whether container runs set `no_new_privs`. Defaults to `true`.
+   *
+   * Only turn this off for a host whose kernel makes the flag fatal: the
+   * combination is rejected on some setups and **every** command inside the
+   * container then fails with `EPERM`. See
+   * {@link DockerRunOptions.noNewPrivileges}; the bootstrap reads
+   * `NEXUS_SANDBOX_NO_NEW_PRIVILEGES` so the webview can never decide this.
+   */
+  readonly sandboxNoNewPrivileges?: boolean;
+  /**
    * Language servers available from the start. More can be added at runtime with
    * the `configure_language_server` tool. Empty by default: the headless core
    * cannot guess which servers a machine has installed.
@@ -105,6 +115,9 @@ export function createCore(options: CoreOptions): NexusCore {
     ...(options.terminalTimeoutMs === undefined
       ? {}
       : { defaultTimeoutMs: options.terminalTimeoutMs }),
+    ...(options.sandboxNoNewPrivileges === undefined
+      ? {}
+      : { noNewPrivileges: options.sandboxNoNewPrivileges }),
   };
 
   // The agent is the only tool built *from* the others, so the regular tools are
