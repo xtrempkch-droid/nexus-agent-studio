@@ -78,6 +78,10 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.toml') }}
           restore-keys: cargo-${{ runner.os }}-
 
+      # Raw job logs require authentication to download, but check-run
+      # annotations do not. `--message-format=short` already puts file, line and
+      # column on the same line as the message, so each error becomes a readable
+      # annotation instead of a bare red X.
       - name: cargo check
         shell: bash
         run: |
@@ -86,11 +90,27 @@ jobs:
             --message-format=short 2>&1 | tee cargo-check.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            # Raw job logs require authentication to download, but check-run
-            # annotations do not. --message-format=short already puts file, line
-            # and column on the same line as the message, so each one becomes a
-            # readable annotation.
             grep -E ': error' cargo-check.log | head -10 | while IFS= read -r line; do
+              printf '::error::%s\n' "$line"
+            done
+          fi
+          exit "$status"
+
+      # The bridge module is Tauri-free on purpose so its tests run here, with no
+      # display and no window. This is what makes the sidecar plumbing verifiable
+      # in CI rather than only on a developer machine.
+      - name: cargo test
+        shell: bash
+        run: |
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml \
+            --message-format=short 2>&1 | tee cargo-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E ': error' cargo-test.log | head -10 | while IFS= read -r line; do
+              printf '::error::%s\n' "$line"
+            done
+            grep -E '^test .* FAILED' cargo-test.log | head -10 | while IFS= read -r line; do
               printf '::error::%s\n' "$line"
             done
           fi
