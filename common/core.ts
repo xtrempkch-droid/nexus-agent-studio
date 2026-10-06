@@ -12,9 +12,11 @@
 import { ExecutionLogger } from './debug/logger.ts';
 import { LocalRunner } from './docker/localRunner.ts';
 import { DockerSandbox, type Sandbox } from './docker/sandbox.ts';
+import { LanguageServerManager, type LanguageServerConfig } from './lsp/languageServerManager.ts';
 import { InternalMCPServer } from './mcp/server.ts';
 import { EditorContextStore, createEditorTools } from './mcp/tools/editorTools.ts';
 import { createFileTools } from './mcp/tools/fileTools.ts';
+import { createLspTools } from './mcp/tools/lspTools.ts';
 import { createModelTools } from './mcp/tools/modelTools.ts';
 import { createAgentTools } from './mcp/tools/agentTools.ts';
 import {
@@ -51,6 +53,12 @@ export interface CoreOptions {
   readonly theme?: ThemeObject;
   /** Command timeout for the sandbox, in milliseconds. */
   readonly terminalTimeoutMs?: number;
+  /**
+   * Language servers available from the start. More can be added at runtime with
+   * the `configure_language_server` tool. Empty by default: the headless core
+   * cannot guess which servers a machine has installed.
+   */
+  readonly languageServers?: readonly LanguageServerConfig[];
 }
 
 /** The assembled core, ready to be driven by any UI. */
@@ -62,6 +70,7 @@ export interface NexusCore {
   readonly plugins: PluginManager;
   readonly sandbox: Sandbox;
   readonly terminal: TerminalRunner;
+  readonly languageServers: LanguageServerManager;
 }
 
 /**
@@ -82,6 +91,12 @@ export function createCore(options: CoreOptions): NexusCore {
     version: options.serverVersion ?? '0.1.0',
   });
 
+  const languageServers = new LanguageServerManager({
+    workspaceRoot: options.workspaceRoot,
+    hints: logger.hints,
+    ...(options.languageServers === undefined ? {} : { configs: options.languageServers }),
+  });
+
   const terminalOptions = {
     workspaceRoot: options.workspaceRoot,
     logger,
@@ -100,6 +115,7 @@ export function createCore(options: CoreOptions): NexusCore {
     ...createEditorTools(editorContext),
     ...createModelTools(),
     ...createTerminalTools(terminalOptions),
+    ...createLspTools({ workspaceRoot: options.workspaceRoot, hints: logger.hints, manager: languageServers }),
   ];
 
   for (const tool of regularTools) {
@@ -114,5 +130,14 @@ export function createCore(options: CoreOptions): NexusCore {
 
   const plugins = new PluginManager({ mcp: server, logger, terminal });
 
-  return { server, logger, themes, editorContext, plugins, sandbox, terminal };
+  return {
+    server,
+    logger,
+    themes,
+    editorContext,
+    plugins,
+    sandbox,
+    terminal,
+    languageServers,
+  };
 }

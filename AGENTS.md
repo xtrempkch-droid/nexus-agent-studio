@@ -85,9 +85,16 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   diretamente.
 - `common/lsp/` é a ponte LSP: protocolo **agnóstico de transporte** (`LspClient`
   recebe um `LspTransport`), com `stdioTransport` para o processo filho e
-  `languageService` traduzindo `publishDiagnostics` em `InlineHint`. O framing
-  (`Content-Length` em **bytes**) é a única parte que pode corromper silenciosamente
-  tudo o que vem depois — mantenha os testes de chunk dividido verdes.
+  `languageService` traduzindo `publishDiagnostics` em `InlineHint`; o
+  `LanguageServerManager` orquestra os servidores (início lazy, `refresh` com
+  espera, tools MCP). O framing (`Content-Length` em **bytes**) é a única parte que
+  pode corromper silenciosamente tudo o que vem depois — mantenha os testes de
+  chunk dividido verdes.
+- **A surface de tools MCP é asserida em três lugares.** Ao adicionar, remover ou
+  renomear uma tool, atualize os três ou o CI fica vermelho: `common/core.test.ts`
+  (lista ordenada), `scripts/smoke-mcp.ts` (`EXPECTED_TOOLS`, conta exata) e
+  `src-tauri/src/mcp.rs` (teste e2e `handshakes_with_the_real_core`). A surface
+  atual são **10 tools**.
 - **Testes são cross-platform (o CI roda em Ubuntu/Windows/macOS).** Nunca fixe
   strings que dependem de plataforma: use `pathToFileURL`/`fileURLToPath`,
   `isAbsolute`/`join` (`node:path`) e compare contra o mesmo helper em vez de um

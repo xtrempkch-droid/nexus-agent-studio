@@ -16,7 +16,7 @@
 //! eras, and a legacy-only client is free to go straight to `initialize`. That
 //! path is also the one already proven to work against this core — the real
 //! client driven from `scripts/smoke-mcp.ts` connects with the SDK's default
-//! legacy handshake and lists the five tools.
+//! legacy handshake and lists the ten tools.
 //!
 //! Speaking the modern flow is a separate slice. When it lands, the
 //! `server/discover` probe belongs here, and its rule must be respected: fall
@@ -545,8 +545,11 @@ mod tests {
             sorted,
             vec![
                 "ask_agent",
+                "configure_language_server",
+                "get_diagnostics",
                 "get_editor_context",
                 "list_directory",
+                "list_language_servers",
                 "list_models",
                 "read_file",
                 "run_terminal_command",

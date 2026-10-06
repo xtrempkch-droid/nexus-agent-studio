@@ -16,6 +16,7 @@
  */
 
 import { callCoreTool } from './shell.ts';
+import type { InlineHint } from './coreTypes.ts';
 
 /** One block of a tool result, as the protocol spells it. */
 interface TextBlock {
@@ -197,4 +198,62 @@ export async function runInSandbox(command: string): Promise<SandboxRun> {
     stderr: asString(payload['stderr']),
     timedOut: payload['timedOut'] === true,
   };
+}
+
+/** A language server as the core reports it. */
+export interface LanguageServerStatus {
+  readonly id: string;
+  readonly languages: readonly string[];
+  readonly command: string;
+  readonly args: readonly string[];
+  /** Whether the server process is currently running. */
+  readonly running: boolean;
+}
+
+/** Inputs for `configure_language_server`. */
+export interface ConfigureLanguageServerInput {
+  readonly id: string;
+  readonly languages: readonly string[];
+  readonly command: string;
+  readonly args?: readonly string[];
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+/** Register or replace a language server in the core. */
+export function configureLanguageServer(
+  input: ConfigureLanguageServerInput,
+): Promise<{ configured: LanguageServerStatus[] }> {
+  return callJsonTool<{ configured: LanguageServerStatus[] }>('configure_language_server', input);
+}
+
+/** List the language servers configured in the core. */
+export function listLanguageServers(): Promise<{ servers: LanguageServerStatus[] }> {
+  return callJsonTool<{ servers: LanguageServerStatus[] }>('list_language_servers', {});
+}
+
+/** The `get_diagnostics` result. */
+export interface DiagnosticsResult {
+  /** The file the result is about, or `null` when every file was returned. */
+  readonly path: string | null;
+  /** Language server that answered, or `null` when none serves the file. */
+  readonly server: string | null;
+  readonly count: number;
+  readonly errors: number;
+  readonly warnings: number;
+  readonly infos: number;
+  readonly diagnostics: readonly InlineHint[];
+}
+
+/**
+ * Ask the core for diagnostics.
+ *
+ * With `path`, the core first refreshes that file in its language server (when
+ * one is configured) and returns only its diagnostics; without `path` it returns
+ * every known diagnostic. Compiler diagnostics produced by a sandboxed run are in
+ * the same store, so one call covers both sources.
+ */
+export function getDiagnostics(
+  input: { path?: string; waitMs?: number; refresh?: boolean } = {},
+): Promise<DiagnosticsResult> {
+  return callJsonTool<DiagnosticsResult>('get_diagnostics', input);
 }

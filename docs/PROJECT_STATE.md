@@ -273,51 +273,44 @@ node dist/core.mjs      # core como MCP server stdio
     complementar (`.git` etc. nem sempre estão no `.gitignore`). **Verificado:**
     `gitignore.test.ts` (11 casos) + 2 casos de integração em `fileTools.test.ts`;
     150 testes no total, smoke verde.
-14. ✅ **Fundação do LSP bridge (`common/lsp/`).** Um editor precisa de
-    diagnósticos reais de linguagem, não só do que o compilador imprime no
-    `stderr` do contêiner. Esta fatia entrega o **cliente LSP** no core, ainda
-    **sem** a fiação na UI (que é a fatia seguinte). Arquivos:
-    - `common/lsp/framing.ts` — codificador/decodificador incremental do
-      base-protocol (`Content-Length` em **bytes**, headers ASCII, `\r\n\r\n`).
-      Verificado na spec oficial 3.17 ("Base Protocol").
-    - `common/lsp/diagnostics.ts` — tradução LSP → `InlineHint` (posições 0-based
-      → 1-based, severidade numérica → 3 níveis, `file://` URI → caminho
-      workspace-relative, com recusa de qualquer arquivo fora do workspace).
-    - `common/lsp/lspClient.ts` — JSON-RPC agnóstico de transporte
-      (`request`/`notify`/`onNotification`, timeout, responde a request do servidor
-      com `Method not found` em vez de travar).
-    - `common/lsp/stdioTransport.ts` — spawn de processo filho + framing; drena o
-      `stderr` para não encher o pipe.
-    - `common/lsp/languageService.ts` — ciclo de documento (`didOpen`/`didChange`/
-      `didClose`) e `publishDiagnostics` → `InlineHintManager`, honrando o sync
-      kind negociado (full ou incremental).
-    **Verificado:** 45 testes LSP (framing 12, diagnostics 9, client 9,
-    languageService 10) **mais 3 de integração com processo filho real** que
-    completam um handshake LSP de verdade; 193 testes no total, build/smoke/desktop
-    verdes. **O que falta:** expor como tool MCP e ligar na UI (comandos Tauri
-    para configurar/iniciar o servidor de linguagem e alimentar o gutter).
-    **Aprendizado (o CI pegou o que o Linux escondeu):** a primeira versão falhou
-    **só nos jobs do Windows** — um teste fixava `file:///ws`, que no Windows vira
-    `file:///D:/ws`. Corrigido comparando contra `pathToFileURL('/ws').href` e
-    trocando o `startsWith('/')` (falso no Windows) por `isAbsolute`/`join` no
-    `LanguageService`. Ver §7 do `AGENTS.md`: testes têm de ser cross-platform, e
-    um verde local (Linux) não prova isso.
+14. ✅ **LSP bridge completo.** Diagnósticos reais de linguagem chegam à UI.
+    - **Core** (`common/lsp/`): framing do base-protocol (spec 3.17),
+      `diagnostics.ts` (LSP → `InlineHint`, confinado ao workspace),
+      `lspClient.ts` (JSON-RPC agnóstico de transporte), `stdioTransport.ts`
+      (processo filho) e `languageService.ts` (ciclo de documento +
+      `publishDiagnostics` → `InlineHintManager`).
+    - **Orquestração** (`common/lsp/languageServerManager.ts`): servidores por
+      linguagem, início **lazy** na primeira verificação, `refresh` que abre/atualiza
+      o arquivo e **aguarda** o push de diagnósticos (com timeout), reconfiguração
+      que derruba o servidor em execução.
+    - **Tools MCP** (`common/mcp/tools/lspTools.ts`): `configure_language_server`,
+      `list_language_servers` e `get_diagnostics` (com `path` faz refresh e devolve
+      o arquivo; sem `path` devolve todos). A surface passou de **7 → 10 tools**.
+    - **Config**: `NEXUS_LSP_SERVERS` (JSON) no bootstrap; `CoreOptions.languageServers`.
+    - **UI**: botão **"Verificar"** no cabeçalho, verificação automática ao abrir e
+      ao salvar, seção **"Servidores de linguagem (LSP)"** nas configurações, e
+      `get_diagnostics` ligado ao gutter via `coreClient.ts`. O store de hints é
+      único: diagnósticos do compilador (via `run_terminal_command`) e do LSP
+      aparecem juntos.
+    **Verificado:** 204 testes (era 193; +11 entre manager e tools), smoke com
+    `get_diagnostics`, e um **e2e sobre MCP** (script ad hoc) que configura um
+    servidor LSP filho real, faz refresh de um arquivo e recebe o diagnóstico com
+    linha 1-based e `source: lsp:<id>` — `LSP E2E OK`. O CI cobre o resto (build +
+    tauri com a lista de 10 tools atualizada).
 
 ---
 
-**Ao retomar.** Fases anteriores **mergeadas em `main`** (`ec45b65`): streaming
-(§5 item 10), projeto/pasta (§5 item 11), modelo livre (§5 item 12), `.gitignore`
-(§5 item 13). Nesta fase, a **fundação do LSP bridge** (§5 item 14) foi
-implementada no core. O que resta é **melhoria**, em ordem de valor sugerida —
-conciliada com o `docs/roadmap.md` ("Next"): (1) **fechar o LSP bridge** — expor
-`get_diagnostics` como tool MCP e ligar na UI (comandos Tauri para configurar e
-iniciar o servidor de linguagem, alimentando o gutter com os hints do LSP);
-(2) fila de requisições no sidecar em vez do mutex bloqueante (§5 item 6-a);
-(3) era moderna da spec 2026-07-28 (§5 item 6-d); (4) WASM target para `common/`
-(exige auditoria DOM-free). Itens de roadmap ainda não priorizados: plugin
-marketplace com assinatura, MCP remoto via Streamable HTTP, integração DAP. Para
-retomar comigo, ler §3 linhas 16–23 (histórico recente) e
-`/memories/repo/build-and-verify.md` (armadilhas já pagas).
+**Ao retomar.** Todo o **LSP bridge** (§5 item 14) está implementado e mergeado:
+cliente, orquestração, tools MCP (`get_diagnostics`, `configure_language_server`,
+`list_language_servers`) e fiação na UI. O que resta é **melhoria** — conciliada
+com o `docs/roadmap.md` ("Next"): (1) fila de requisições no sidecar em vez do
+mutex bloqueante (§5 item 6-a); (2) era moderna da spec 2026-07-28 (§5 item 6-d);
+(3) WASM target para `common/` (exige auditoria DOM-free); (4) **alimentar o
+`get_editor_context`** (a UI ainda não envia cursor/seleção ao core, então essa
+tool reporta o estado vazio — mesma classe de lacuna que o LSP tinha). Itens de
+roadmap ainda não priorizados: plugin marketplace com assinatura, MCP remoto via
+Streamable HTTP, integração DAP. Para retomar comigo, ler §3 linhas 16–23
+(histórico recente) e `/memories/repo/build-and-verify.md` (armadilhas já pagas).
 
 ## 6. Decisões e correções em relação ao prompt original
 
