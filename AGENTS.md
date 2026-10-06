@@ -83,6 +83,18 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   alcança o shell (comandos Tauri + eventos). `lib/coreClient.ts` desembrulha o
   envelope das tools. Nenhum outro componente importa `window.__TAURI__`
   diretamente.
+- `common/lsp/` é a ponte LSP: protocolo **agnóstico de transporte** (`LspClient`
+  recebe um `LspTransport`), com `stdioTransport` para o processo filho e
+  `languageService` traduzindo `publishDiagnostics` em `InlineHint`. O framing
+  (`Content-Length` em **bytes**) é a única parte que pode corromper silenciosamente
+  tudo o que vem depois — mantenha os testes de chunk dividido verdes.
+- **Testes são cross-platform (o CI roda em Ubuntu/Windows/macOS).** Nunca fixe
+  strings que dependem de plataforma: use `pathToFileURL`/`fileURLToPath`,
+  `isAbsolute`/`join` (`node:path`) e compare contra o mesmo helper em vez de um
+  literal. Um `file:///ws` fixo vira `file:///D:/ws` no Windows e derruba o job —
+  já aconteceu (ver o commit `ed83db3`). O mesmo vale para separador `/` hardcoded.
+  Localmente (Linux) esses erros passam; **só o CI os pega**, então não confie num
+  verde local para concluir que está portável.
 
 ## Como verificar o seu trabalho
 
