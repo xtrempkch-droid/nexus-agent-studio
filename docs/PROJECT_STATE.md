@@ -296,6 +296,12 @@ node dist/core.mjs      # core como MCP server stdio
     completam um handshake LSP de verdade; 193 testes no total, build/smoke/desktop
     verdes. **O que falta:** expor como tool MCP e ligar na UI (comandos Tauri
     para configurar/iniciar o servidor de linguagem e alimentar o gutter).
+    **Aprendizado (o CI pegou o que o Linux escondeu):** a primeira versão falhou
+    **só nos jobs do Windows** — um teste fixava `file:///ws`, que no Windows vira
+    `file:///D:/ws`. Corrigido comparando contra `pathToFileURL('/ws').href` e
+    trocando o `startsWith('/')` (falso no Windows) por `isAbsolute`/`join` no
+    `LanguageService`. Ver §7 do `AGENTS.md`: testes têm de ser cross-platform, e
+    um verde local (Linux) não prova isso.
 
 ---
 
