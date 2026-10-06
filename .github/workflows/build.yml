@@ -49,6 +49,11 @@ jobs:
       - name: Build (core)
         run: npm run build
 
+      # Separate from `tsc`: this is the only step that proves Vite resolves the
+      # React plugin, the Tailwind v4 `@theme` block and the `@core` alias.
+      - name: Build (desktop)
+        run: npm run build:desktop
+
       # Must run after the build: it spawns dist/core.mjs. A typecheck proves the
       # SDK types line up; only this proves the server actually serves.
       - name: Smoke test (MCP over stdio)
