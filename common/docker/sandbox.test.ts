@@ -27,6 +27,19 @@ function createHarness(result: CommandExecutionResult = SUCCESS): Harness {
 }
 
 describe('DockerSandbox.buildArgv', () => {
+  it('produces a complete argv, starting with the binary the executor spawns', () => {
+    // The regression this pins: the argv used to start at `run`, so the real
+    // executor called `spawn('run')` and every sandboxed command failed with
+    // ENOENT and exit 127 — invisible to the other tests here, because they all
+    // inject an executor that never spawns anything. `LocalRunner` hands the same
+    // executor `['sh', '-lc', …]`, so "argv[0] is the binary" is the contract.
+    const { sandbox } = createHarness();
+    const argv = sandbox.buildArgv({ image: 'alpine', command: 'true', workspaceDir: '/w' });
+
+    expect(argv[0]).toBe('docker');
+    expect(argv[1]).toBe('run');
+  });
+
   it('applies every isolation flag', () => {
     const { sandbox } = createHarness();
     const argv = sandbox.buildArgv({
@@ -35,7 +48,7 @@ describe('DockerSandbox.buildArgv', () => {
       workspaceDir: '/home/dev/project',
     });
 
-    expect(argv.slice(0, 2)).toEqual(['run', '--rm']);
+    expect(argv.slice(0, 3)).toEqual(['docker', 'run', '--rm']);
     expect(argv).toContain('--name');
     expect(argv).toContain('--cap-drop');
     expect(argv[argv.indexOf('--cap-drop') + 1]).toBe('ALL');
@@ -76,6 +89,84 @@ describe('DockerSandbox.buildArgv', () => {
     expect(argv[argv.indexOf('--cpus') + 1]).toBe('2.5');
     expect(argv[argv.indexOf('-w') + 1]).toBe('/code');
     expect(argv[argv.indexOf('-v') + 1]).toBe('/w:/code');
+  });
+
+  it('sets no-new-privileges by default and drops it only when asked', () => {
+    // The flag is defence in depth against a setuid binary inside the image, so
+    // it is on unless the host rejects it — some kernels fail every execve in
+    // the container with EPERM when it is set, which breaks the sandbox instead
+    // of hardening it. Off is therefore explicit, never a default.
+    const { sandbox } = createHarness();
+    const base = { image: 'alpine', command: 'true', workspaceDir: '/w' };
+
+    const hardened = sandbox.buildArgv(base);
+    expect(hardened[hardened.indexOf('--security-opt') + 1]).toBe('no-new-privileges');
+
+    const relaxed = sandbox.buildArgv({ ...base, noNewPrivileges: false });
+    expect(relaxed).not.toContain('--security-opt');
+    expect(relaxed).toContain('--cap-drop');
+  });
+
+  it('runs as the requested user, with a writable HOME', () => {
+    // `--cap-drop ALL` on root removes `CAP_DAC_OVERRIDE`, so a container that
+    // stayed root could not write a workspace owned by the desktop user at all
+    // (`Permission denied`), and the files it could write would be owned by
+    // root inside the user's project.
+    const { sandbox } = createHarness();
+    const argv = sandbox.buildArgv({
+      image: 'alpine',
+      command: 'true',
+      workspaceDir: '/w',
+      user: '1234:5678',
+    });
+
+    expect(argv[argv.indexOf('--user') + 1]).toBe('1234:5678');
+    expect(argv).toContain('HOME=/tmp');
+  });
+
+  it('keeps an explicit HOME instead of overriding it', () => {
+    const { sandbox } = createHarness();
+    const argv = sandbox.buildArgv({
+      image: 'alpine',
+      command: 'true',
+      workspaceDir: '/w',
+      user: '1234:5678',
+      env: { HOME: '/opt/home' },
+    });
+
+    expect(argv).toContain('HOME=/opt/home');
+    expect(argv).not.toContain('HOME=/tmp');
+  });
+
+  it('accepts an explicit root user', () => {
+    const { sandbox } = createHarness();
+    const argv = sandbox.buildArgv({
+      image: 'alpine',
+      command: 'true',
+      workspaceDir: '/w',
+      user: '0:0',
+    });
+
+    expect(argv[argv.indexOf('--user') + 1]).toBe('0:0');
+  });
+
+  // The default only exists where there is a `uid` to default to, and CI runs
+  // on Windows as well: asserting a POSIX default there would fail for a reason
+  // that is not a bug.
+  it.skipIf(process.getuid === undefined)('defaults to the current user on POSIX', () => {
+    const { sandbox } = createHarness();
+    const argv = sandbox.buildArgv({ image: 'alpine', command: 'true', workspaceDir: '/w' });
+
+    expect(argv[argv.indexOf('--user') + 1]).toBe(`${String(process.getuid?.())}:${String(process.getgid?.())}`);
+    expect(argv).toContain('HOME=/tmp');
+  });
+
+  it.skipIf(process.getuid !== undefined)('omits the user flag where there is no uid', () => {
+    const { sandbox } = createHarness();
+    const argv = sandbox.buildArgv({ image: 'alpine', command: 'true', workspaceDir: '/w' });
+
+    expect(argv).not.toContain('--user');
+    expect(argv).not.toContain('HOME=/tmp');
   });
 
   it('injects environment variables and extra flags before the image', () => {
