@@ -28,6 +28,7 @@ import type { InlineHint } from './lib/coreTypes.ts';
 import { describeCore, isShellAvailable, workspaceInfo } from './lib/shell.ts';
 import {
   listDirectory,
+  listModels,
   readFile,
   runInSandbox,
   writeFile,
@@ -51,11 +52,16 @@ interface FileRecord {
   readonly content: string;
 }
 
-const MODELS: readonly ModelOption[] = [
-  { id: 'demo-simulation', label: '⚡ Modo Simulação (sem Ollama)' },
-  { id: 'qwen2.5-coder:14b', label: 'Qwen2.5-Coder 14B' },
-  { id: 'deepseek-coder-v2:16b', label: 'DeepSeek-Coder-V2 16B' },
-  { id: 'llama3.1:8b', label: 'Llama 3.1 8B Instruct' },
+/** An AI provider the settings panel can talk to. */
+interface AiProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly baseUrl: string;
+  readonly kind: 'ollama' | 'openai';
+}
+
+const DEFAULT_PROVIDERS: readonly AiProvider[] = [
+  { id: 'ollama-local', name: 'Ollama local', baseUrl: 'http://localhost:11434', kind: 'ollama' },
 ];
 
 /**
@@ -150,7 +156,7 @@ export default function App() {
 
   const [mode, setMode] = useState<AgentMode>('assisted');
   const [approveAll, setApproveAll] = useState(false);
-  const [model, setModel] = useState<string>('demo-simulation');
+  const [activeModel, setActiveModel] = useState<string>('');
 
   const [messages, setMessages] = useState<readonly ChatMessage[]>([
     {
@@ -176,7 +182,14 @@ export default function App() {
   const [diffText, setDiffText] = useState('Nenhuma alteração registrada nesta sessão.');
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
+  const [providers, setProviders] = useState<readonly AiProvider[]>(DEFAULT_PROVIDERS);
+  const [activeProviderId, setActiveProviderId] = useState('ollama-local');
+  const [syncedModels, setSyncedModels] = useState<readonly string[]>([]);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [newProviderName, setNewProviderName] = useState('');
+  const [newProviderUrl, setNewProviderUrl] = useState('http://localhost:11434');
+  const [newProviderKind, setNewProviderKind] = useState<'ollama' | 'openai'>('ollama');
   const [connectionLabel, setConnectionLabel] = useState('Simulação');
   const [connectionDotClass, setConnectionDotClass] = useState('bg-amber-400');
   const [workspaceLabel, setWorkspaceLabel] = useState('sem workspace');
@@ -184,11 +197,6 @@ export default function App() {
   const currentFile = useMemo(
     () => files.find((file) => file.path === activeFile) ?? null,
     [files, activeFile],
-  );
-
-  const activeModelLabel = useMemo(
-    () => MODELS.find((option) => option.id === model)?.label ?? model,
-    [model],
   );
 
   /**
@@ -517,21 +525,75 @@ export default function App() {
     [shellDraft],
   );
 
-  const testOllama = useCallback(async () => {
-    try {
-      const response = await fetch(`${ollamaUrl}/api/tags`);
-      if (response.ok) {
-        setConnectionLabel('Ollama Online');
-        setConnectionDotClass('bg-emerald-400 animate-pulse');
-      } else {
-        setConnectionLabel('Ollama Offline');
-        setConnectionDotClass('bg-red-400');
-      }
-    } catch {
-      setConnectionLabel('Ollama Offline');
-      setConnectionDotClass('bg-red-400');
+  const activeProvider = useMemo(
+    () => providers.find((provider) => provider.id === activeProviderId) ?? providers[0] ?? null,
+    [activeProviderId, providers],
+  );
+
+  /** Ask the active provider which models it exposes, so the user can choose one. */
+  const syncModels = useCallback(async () => {
+    if (activeProvider === null) {
+      return;
     }
-  }, [ollamaUrl]);
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const result = await listModels(activeProvider.kind, activeProvider.baseUrl);
+      setSyncedModels(result.models);
+      setActiveModel((previous) =>
+        previous === '' || !result.models.includes(previous)
+          ? (result.models[0] ?? '')
+          : previous,
+      );
+      setConnectionLabel(`${activeProvider.name}: ${String(result.count)} modelo(s)`);
+      setConnectionDotClass('bg-emerald-400');
+    } catch (error) {
+      setSyncError(String(error));
+      setConnectionLabel('IA offline');
+      setConnectionDotClass('bg-red-400');
+    } finally {
+      setSyncing(false);
+    }
+  }, [activeProvider]);
+
+  const addProvider = useCallback(() => {
+    const name = newProviderName.trim();
+    const url = newProviderUrl.trim();
+    if (name === '' || url === '') {
+      return;
+    }
+    const provider: AiProvider = { id: uid(), name, baseUrl: url, kind: newProviderKind };
+    setProviders((previous) => [...previous, provider]);
+    setActiveProviderId(provider.id);
+    setSyncedModels([]);
+    setNewProviderName('');
+  }, [newProviderKind, newProviderName, newProviderUrl]);
+
+  const removeProvider = useCallback(
+    (id: string) => {
+      if (providers.length === 1) {
+        return;
+      }
+      const remaining = providers.filter((provider) => provider.id !== id);
+      setProviders(remaining);
+      if (id === activeProviderId) {
+        setActiveProviderId(remaining[0]?.id ?? 'ollama-local');
+      }
+    },
+    [activeProviderId, providers],
+  );
+
+  const modelOptions = useMemo<readonly ModelOption[]>(() => {
+    if (syncedModels.length === 0) {
+      return [{ id: '', label: 'Sincronize um provedor' }];
+    }
+    return syncedModels.map((name) => ({ id: name, label: name }));
+  }, [syncedModels]);
+
+  const activeModelLabel = useMemo(
+    () => modelOptions.find((option) => option.id === activeModel)?.label ?? activeModel,
+    [modelOptions, activeModel],
+  );
 
   const clearHints = useCallback(() => setHints([]), []);
 
@@ -539,9 +601,9 @@ export default function App() {
     <div className="flex h-full flex-col overflow-hidden bg-ide-bg text-slate-200">
       <HeaderBar
         workspaceLabel={workspaceLabel}
-        models={MODELS}
-        selectedModel={model}
-        onModelChange={setModel}
+        models={modelOptions}
+        selectedModel={activeModel}
+        onModelChange={setActiveModel}
         mode={mode}
         onModeChange={setMode}
         connectionLabel={connectionLabel}
@@ -715,25 +777,124 @@ export default function App() {
 
             <div className="space-y-3 text-xs">
               <div>
-                <label htmlFor="ollama-url" className="mb-1 block font-medium text-slate-300">
-                  URL do Servidor Ollama Local:
+                <label htmlFor="provider-select" className="mb-1 block font-medium text-slate-300">
+                  Provedor de IA:
                 </label>
-                <input
-                  id="ollama-url"
-                  value={ollamaUrl}
-                  onChange={(event) => setOllamaUrl(event.target.value)}
+                <select
+                  id="provider-select"
+                  value={activeProviderId}
+                  onChange={(event) => {
+                    setActiveProviderId(event.target.value);
+                    setSyncedModels([]);
+                  }}
                   className="w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+                >
+                  {providers.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name} — {provider.baseUrl}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                {providers.map((provider) => (
+                  <div
+                    key={provider.id}
+                    className="flex items-center justify-between rounded border border-slate-800 bg-slate-950/60 px-2 py-1"
+                  >
+                    <span className="font-mono text-slate-300">
+                      {provider.name}
+                      <span className="ml-1 text-[10px] text-slate-500">
+                        ({provider.kind} · {provider.baseUrl})
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeProvider(provider.id)}
+                      disabled={providers.length === 1}
+                      title="Remover provedor"
+                      className="text-slate-500 hover:text-red-400 disabled:opacity-30"
+                    >
+                      <Icon name="trash" className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-1.5 rounded border border-slate-800 bg-slate-950/40 p-2">
+                <span className="font-medium text-slate-300">Adicionar provedor</span>
+                <input
+                  value={newProviderName}
+                  onChange={(event) => setNewProviderName(event.target.value)}
+                  placeholder="Nome (ex: Meu servidor)"
+                  className="w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
                 />
+                <input
+                  value={newProviderUrl}
+                  onChange={(event) => setNewProviderUrl(event.target.value)}
+                  placeholder="http://localhost:11434"
+                  className="w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+                />
+                <div className="flex items-center gap-2">
+                  <select
+                    value={newProviderKind}
+                    onChange={(event) =>
+                      setNewProviderKind(event.target.value as 'ollama' | 'openai')
+                    }
+                    className="rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="ollama">Ollama</option>
+                    <option value="openai">OpenAI-compatível</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={addProvider}
+                    className="flex-1 rounded border border-slate-700 bg-slate-800 py-1.5 font-medium text-slate-200 hover:bg-slate-700"
+                  >
+                    Adicionar
+                  </button>
+                </div>
               </div>
 
               <button
                 type="button"
-                onClick={() => void testOllama()}
-                className="flex w-full items-center justify-center gap-2 rounded border border-slate-700 bg-slate-800 py-2 font-medium text-slate-200 hover:bg-slate-700"
+                onClick={() => void syncModels()}
+                disabled={syncing}
+                className="flex w-full items-center justify-center gap-2 rounded border border-slate-700 bg-slate-800 py-2 font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-50"
               >
-                <Icon name="wifi" className="h-3.5 w-3.5" />
-                <span>Testar Conexão com Ollama</span>
+                <Icon name="refresh" className="h-3.5 w-3.5" />
+                <span>{syncing ? 'Sincronizando…' : 'Sincronizar modelos'}</span>
               </button>
+
+              {syncError !== null && (
+                <p className="rounded border border-red-500/30 bg-red-500/10 p-2 text-red-300">
+                  {syncError}
+                </p>
+              )}
+
+              {syncedModels.length > 0 && (
+                <div className="space-y-1">
+                  <span className="font-medium text-slate-300">
+                    Modelos disponíveis — escolha o ativo:
+                  </span>
+                  {syncedModels.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setActiveModel(name)}
+                      className={`flex w-full items-center justify-between rounded border px-2 py-1.5 font-mono text-left ${
+                        activeModel === name
+                          ? 'border-indigo-500 bg-indigo-950/60 text-indigo-300'
+                          : 'border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <span>{name}</span>
+                      {activeModel === name && <Icon name="check" className="h-3.5 w-3.5" />}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end border-t border-slate-800 pt-3">

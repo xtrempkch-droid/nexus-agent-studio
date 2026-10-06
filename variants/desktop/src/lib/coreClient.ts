@@ -116,6 +116,19 @@ export function writeFile(path: string, content: string): Promise<WriteOutcome> 
   return callJsonTool<WriteOutcome>('write_file', { path, content });
 }
 
+/** The `list_models` result. */
+export interface ModelListResult {
+  readonly kind: 'ollama' | 'openai';
+  readonly baseUrl: string;
+  readonly count: number;
+  readonly models: readonly string[];
+}
+
+/** List the model names a provider exposes. */
+export function listModels(kind: 'ollama' | 'openai', baseUrl: string): Promise<ModelListResult> {
+  return callJsonTool<ModelListResult>('list_models', { kind, baseUrl });
+}
+
 /** What a sandboxed command produced. */
 export interface SandboxRun {
   readonly containerId: string;
