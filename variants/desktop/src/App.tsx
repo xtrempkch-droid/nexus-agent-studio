@@ -383,29 +383,66 @@ export default function App() {
     selection: null,
   });
   const contextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contextPending = useRef<EditorBaseContext | null>(null);
+  const contextInFlight = useRef(false);
   const baseContextRef = useRef(baseContext);
 
   /**
-   * Report the editor state to the core, debounced.
+   * Send the pending report, if any, and only once the previous one is answered.
    *
-   * This is the write half of `get_editor_context`; without it the agent sees an
-   * empty context and has to ask which file and lines the user means. Failure is
-   * silent on purpose — in the browser there is no core to talk to, and a failed
-   * background sync is not worth a terminal line per cursor move.
+   * One report at a time is not cosmetic: every tool call serialises on the
+   * shell's single core session, and `ask_agent` holds that session for as long
+   * as the model takes. A report sent during a turn therefore *waits* there, and
+   * one report per keystroke would pile up a blocked worker each until the turn
+   * ended. Coalescing keeps the core current without ever queueing more than the
+   * latest state.
    */
-  const pushEditorContext = useCallback((context: EditorBaseContext) => {
-    if (!isShellAvailable()) {
+  const flushEditorContext = useCallback(function flush(): void {
+    if (!isShellAvailable() || contextInFlight.current) {
       return;
     }
-    if (contextTimer.current !== null) {
-      clearTimeout(contextTimer.current);
+    const next = contextPending.current;
+    if (next === null) {
+      return;
     }
-    contextTimer.current = setTimeout(() => {
-      contextTimer.current = null;
-      const { cursor, selection } = caretRef.current;
-      void setEditorContext({ ...context, cursor, selection }).catch(() => undefined);
-    }, CONTEXT_DEBOUNCE_MS);
+    contextPending.current = null;
+    contextInFlight.current = true;
+    const { cursor, selection } = caretRef.current;
+    void setEditorContext({ ...next, cursor, selection })
+      .catch(() => undefined)
+      .finally(() => {
+        contextInFlight.current = false;
+        // Whatever arrived while this was in flight is sent now, so the core
+        // still ends up with the latest state instead of the one from before it
+        // was busy.
+        flush();
+      });
   }, []);
+
+  /**
+   * Record what the editor is showing and schedule a report.
+   *
+   * Debounced because the caret moves on every keystroke while the value the
+   * agent reads only needs to be the latest one. Failure is silent on purpose —
+   * in the browser there is no core to talk to, and a failed background sync is
+   * not worth a terminal line per cursor move.
+   */
+  const pushEditorContext = useCallback(
+    (context: EditorBaseContext) => {
+      if (!isShellAvailable()) {
+        return;
+      }
+      contextPending.current = context;
+      if (contextTimer.current !== null) {
+        clearTimeout(contextTimer.current);
+      }
+      contextTimer.current = setTimeout(() => {
+        contextTimer.current = null;
+        flushEditorContext();
+      }, CONTEXT_DEBOUNCE_MS);
+    },
+    [flushEditorContext],
+  );
 
   /** Record where the caret is, then let the debounced report carry it. */
   const captureCaret = useCallback(

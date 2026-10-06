@@ -103,6 +103,14 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   bug da §5 item 16). Use `tauri::State` só em comandos instantâneos; para os
   bloqueantes, receba `tauri::AppHandle` e chame `app.state::<T>()` **dentro** do
   closure `move` do `spawn_blocking` (o `State` pega emprestado do `AppHandle`).
+- **A sessão do core é única e serializada.** `ShellState::with_core` segura um
+  `Mutex` por toda a chamada, então **duas chamadas de tool nunca rodam juntas**, e
+  `ask_agent` segura esse mutex por todo o tempo do modelo (minutos num modelo
+  local). Consequência para quem escreve UI: **nunca dispare uma chamada de core por
+  evento** (cada tecla, cada pixel de scroll) — as requisições ficam *enfileiradas no
+  mutex* e a espera se acumula. Debounce e **no máximo uma em voo** (veja
+  `flushEditorContext` em `App.tsx`). A solução de fundo é a fila no sidecar (§5
+  item 6-a do `PROJECT_STATE.md`).
 - **Testes são cross-platform (o CI roda em Ubuntu/Windows/macOS).** Nunca fixe
   strings que dependem de plataforma: use `pathToFileURL`/`fileURLToPath`,
   `isAbsolute`/`join` (`node:path`) e compare contra o mesmo helper em vez de um
