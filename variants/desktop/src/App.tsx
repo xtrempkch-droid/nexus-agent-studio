@@ -191,6 +191,12 @@ export default function App() {
   const [newProviderName, setNewProviderName] = useState('');
   const [newProviderUrl, setNewProviderUrl] = useState('http://localhost:11434');
   const [newProviderKind, setNewProviderKind] = useState<'ollama' | 'openai'>('ollama');
+
+  /** The provider whose models and settings are currently in use. */
+  const activeProvider = useMemo(
+    () => providers.find((provider) => provider.id === activeProviderId) ?? providers[0] ?? null,
+    [activeProviderId, providers],
+  );
   const [connectionLabel, setConnectionLabel] = useState('Simulação');
   const [connectionDotClass, setConnectionDotClass] = useState('bg-amber-400');
   const [workspaceLabel, setWorkspaceLabel] = useState('sem workspace');
@@ -467,11 +473,6 @@ export default function App() {
         });
     },
     [shellDraft],
-  );
-
-  const activeProvider = useMemo(
-    () => providers.find((provider) => provider.id === activeProviderId) ?? providers[0] ?? null,
-    [activeProviderId, providers],
   );
 
   /** Ask the active provider which models it exposes, so the user can choose one. */
