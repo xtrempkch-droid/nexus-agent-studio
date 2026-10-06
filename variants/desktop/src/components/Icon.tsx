@@ -13,6 +13,7 @@ import type { ReactNode } from 'react';
 export type IconName =
   | 'bot'
   | 'folder'
+  | 'folder-open'
   | 'folder-git'
   | 'files'
   | 'file-code'
@@ -49,6 +50,12 @@ const PATHS: Readonly<Record<IconName, ReactNode>> = {
     </>
   ),
   folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+  'folder-open': (
+    <>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M3 13h6l1.5 2H19" />
+    </>
+  ),
   'folder-git': (
     <>
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />

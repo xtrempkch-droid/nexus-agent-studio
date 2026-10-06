@@ -25,7 +25,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { AgentProgressEvent, InlineHint } from './lib/coreTypes.ts';
-import { describeCore, isShellAvailable, onAgentStream, workspaceInfo } from './lib/shell.ts';
+import {
+  describeCore,
+  isShellAvailable,
+  onAgentStream,
+  pickWorkspace,
+  setWorkspace,
+  workspaceInfo,
+} from './lib/shell.ts';
 import {
   askAgent,
   listDirectory,
@@ -212,6 +219,7 @@ export default function App() {
   const [newProviderName, setNewProviderName] = useState('');
   const [newProviderUrl, setNewProviderUrl] = useState('http://localhost:11434');
   const [newProviderKind, setNewProviderKind] = useState<'ollama' | 'openai'>('ollama');
+  const [workspacePathDraft, setWorkspacePathDraft] = useState('');
 
   /** The provider whose models and settings are currently in use. */
   const activeProvider = useMemo(
@@ -398,6 +406,66 @@ export default function App() {
   const navigateUp = useCallback(() => {
     void loadDirectory(parentOf(currentDir));
   }, [currentDir, loadDirectory]);
+
+  /**
+   * Re-point the editor at a new workspace and reset every view that was scoped
+   * to the old one: files, explorer, tabs, diagnostics, terminals and any
+   * pending approval. The chat history is intentionally kept — it belongs to the
+   * session, not to the project.
+   */
+  const applyWorkspace = useCallback(
+    async (path: string) => {
+      setWorkspaceLabel(path);
+      setFiles([]);
+      setEntries([]);
+      setActiveFile('');
+      setOpenTabs([]);
+      setCurrentDir('.');
+      setHints([]);
+      setTerminalLines([]);
+      setSandboxStatus('idle');
+      setShellLines([]);
+      setDiffText('Nenhuma alteração registrada nesta sessão.');
+      setPendingApproval(null);
+      resumeQueue.current.clear();
+      appendTerminal(line('system', `Workspace: ${path}`));
+      await loadDirectory('.');
+    },
+    [appendTerminal, loadDirectory],
+  );
+
+  /** Open the native folder picker and switch to the chosen project. */
+  const openWorkspace = useCallback(async () => {
+    if (!isShellAvailable()) {
+      appendTerminal(
+        line('stderr', 'O shell não está disponível — escolha a pasta ao abrir o aplicativo.'),
+      );
+      return;
+    }
+    try {
+      const path = await pickWorkspace();
+      if (path !== null) {
+        await applyWorkspace(path);
+      }
+    } catch (error) {
+      appendTerminal(line('stderr', `Falha ao abrir projeto: ${String(error)}`));
+    }
+  }, [appendTerminal, applyWorkspace]);
+
+  /** Switch to a workspace typed by hand in the settings panel. */
+  const applyManualWorkspace = useCallback(async () => {
+    const path = workspacePathDraft.trim();
+    if (path === '') {
+      return;
+    }
+    try {
+      const canonical = await setWorkspace(path);
+      await applyWorkspace(canonical);
+      setWorkspacePathDraft('');
+    } catch (error) {
+      appendTerminal(line('stderr', `Falha ao definir pasta: ${String(error)}`));
+    }
+  }, [appendTerminal, applyWorkspace, workspacePathDraft]);
 
   // Connect to the real core when running inside the desktop shell.
   //
@@ -743,6 +811,7 @@ export default function App() {
         connectionLabel={connectionLabel}
         connectionDotClass={connectionDotClass}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenWorkspace={() => void openWorkspace()}
       />
 
       <div className="relative flex flex-1 overflow-hidden">
@@ -763,6 +832,7 @@ export default function App() {
             clearHints();
             void loadDirectory(currentDir);
           }}
+          onOpenWorkspace={() => void openWorkspace()}
         />
 
         <main className="flex min-w-0 flex-1 flex-col border-r border-slate-800/80 bg-ide-editor">
@@ -910,6 +980,36 @@ export default function App() {
             </div>
 
             <div className="space-y-3 text-xs">
+              <div>
+                <label htmlFor="workspace-path" className="mb-1 block font-medium text-slate-300">
+                  Pasta do projeto:
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="workspace-path"
+                    value={workspacePathDraft}
+                    onChange={(event) => setWorkspacePathDraft(event.target.value)}
+                    placeholder={
+                      workspaceLabel === 'sem workspace' ? '/caminho/do/projeto' : workspaceLabel
+                    }
+                    spellCheck={false}
+                    autoComplete="off"
+                    className="flex-1 rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-slate-200 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void applyManualWorkspace()}
+                    className="rounded border border-slate-700 bg-slate-800 px-3 py-2 font-medium text-slate-200 hover:bg-slate-700"
+                  >
+                    Abrir
+                  </button>
+                </div>
+                <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                  Digite o caminho de um projeto existente, ou use &ldquo;Abrir
+                  projeto&rdquo; no topo para escolher pelo diálogo do sistema.
+                </p>
+              </div>
+
               <div>
                 <label htmlFor="provider-select" className="mb-1 block font-medium text-slate-300">
                   Provedor de IA:

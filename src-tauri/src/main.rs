@@ -7,11 +7,14 @@
 //! The shell owns one **long-lived** core session — started lazily by
 //! `ShellState::with_core`, restarted if the process died — and exposes it to the
 //! webview through a small command surface: `shell_info`, `workspace_info`,
-//! `core_boot_probe`, `core_handshake` and `call_core_tool`.
+//! `core_boot_probe`, `core_handshake`, `call_core_tool`, `set_workspace` and
+//! `pick_workspace`.
 //!
 //! Two roots are kept deliberately separate: `app_root` is where the bundle
 //! lives and the core is found, `workspace_root` is the project the core edits
-//! and becomes the child process's working directory.
+//! and becomes the child process's working directory. The latter is mutable at
+//! runtime — `set_workspace` / `pick_workspace` re-point the editor at another
+//! directory by switching the stored path and restarting the core lazily.
 //!
 //! The layers are split so each can be tested without a window: process plumbing
 //! lives in `bridge`, the MCP protocol in `mcp`, and this file only wires them to
@@ -23,14 +26,15 @@
 mod bridge;
 mod mcp;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use bridge::{spawn_core, wait_for_boot, CoreConfig};
 use mcp::{CoreSession, SessionError};
 use serde_json::Value;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::{DialogExt, FilePath};
 
 /// How long the shell waits for the core to announce itself.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -53,9 +57,10 @@ struct ShellState {
     ///
     /// Kept apart from `app_root` on purpose. The core reads its workspace from
     /// its own working directory, so giving both the same value would pin the
-    /// editor to whatever directory the app happened to be launched from, with
-    /// no way to open a project.
-    workspace_root: PathBuf,
+    /// editor to whatever directory the app happened to be launched from. Unlike
+    /// `app_root`, this is mutable at runtime: the user can open another project
+    /// through the native folder picker, and `switch_workspace` updates it.
+    workspace_root: Mutex<PathBuf>,
     /// The single core session, started on first use and reused after that.
     ///
     /// The mutex is not only about thread safety: stdio is one
@@ -74,7 +79,7 @@ impl ShellState {
     fn new(app_root: PathBuf, workspace_root: PathBuf, notification_tx: mpsc::Sender<Value>) -> Self {
         Self {
             app_root,
-            workspace_root,
+            workspace_root: Mutex::new(workspace_root),
             core: Mutex::new(None),
             notification_tx,
         }
@@ -99,7 +104,11 @@ impl ShellState {
             // The protocol is stateless and the spec says the client SHOULD
             // restart a server that exited unexpectedly, so a dead core is
             // replaced rather than surfaced as an error.
-            *guard = Some(self.start_core()?);
+            let workspace = self
+                .workspace_root
+                .lock()
+                .map_err(|_| "the workspace lock was poisoned".to_string())?;
+            *guard = Some(self.start_core(&workspace)?);
         }
 
         let session = guard
@@ -116,9 +125,9 @@ impl ShellState {
     /// which project to serve. Every session is wired to the notification
     /// channel, so its reader thread streams deltas back while a call is in
     /// flight.
-    fn start_core(&self) -> Result<CoreSession, String> {
+    fn start_core(&self, workspace_root: &Path) -> Result<CoreSession, String> {
         let config = CoreConfig::for_app_root(&self.app_root);
-        let child = spawn_core(&config, &self.workspace_root).map_err(|error| error.to_string())?;
+        let child = spawn_core(&config, workspace_root).map_err(|error| error.to_string())?;
         let mut session = CoreSession::start_with_notifications(child, Some(self.notification_tx.clone()))
             .map_err(|error| error.to_string())?;
 
@@ -129,6 +138,38 @@ impl ShellState {
         }
 
         Ok(session)
+    }
+
+    /// Point the editor at a new workspace directory and stop the running core.
+    ///
+    /// The path is canonicalised so the label and every file tool agree on one
+    /// spelling, and the existing core is shut down rather than left pointed at
+    /// the old directory — the next use lazily starts a fresh one there. Locks
+    /// are taken one at a time, never nested, so there is no ordering to deadlock.
+    fn switch_workspace(&self, path: PathBuf) -> Result<String, String> {
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| format!("pasta inválida: {error}"))?;
+        if !canonical.is_dir() {
+            return Err(format!("não é um diretório: {}", canonical.display()));
+        }
+
+        let mut core = self
+            .core
+            .lock()
+            .map_err(|_| "the core session lock was poisoned".to_string())?;
+        if let Some(session) = core.take() {
+            let _ = session.shutdown(Duration::from_secs(5));
+        }
+        drop(core);
+
+        let mut workspace = self
+            .workspace_root
+            .lock()
+            .map_err(|_| "the workspace lock was poisoned".to_string())?;
+        *workspace = canonical.clone();
+
+        Ok(canonical.display().to_string())
     }
 }
 
@@ -149,8 +190,11 @@ fn shell_info() -> String {
 #[tauri::command]
 fn core_boot_probe(state: tauri::State<'_, ShellState>) -> Result<String, String> {
     let config = CoreConfig::for_app_root(&state.app_root);
-    let mut child =
-        spawn_core(&config, &state.workspace_root).map_err(|error| error.to_string())?;
+    let workspace = state
+        .workspace_root
+        .lock()
+        .map_err(|_| "the workspace lock was poisoned".to_string())?;
+    let mut child = spawn_core(&config, &workspace).map_err(|error| error.to_string())?;
 
     let read = wait_for_boot(&mut child, BOOT_TIMEOUT);
 
@@ -205,8 +249,50 @@ fn call_core_tool(
 /// while the editor looked somewhere else entirely, so there was no way to tell
 /// a wrong workspace from an empty one. This reports the real path instead.
 #[tauri::command]
-fn workspace_info(state: tauri::State<'_, ShellState>) -> String {
-    state.workspace_root.display().to_string()
+fn workspace_info(state: tauri::State<'_, ShellState>) -> Result<String, String> {
+    let workspace = state
+        .workspace_root
+        .lock()
+        .map_err(|_| "the workspace lock was poisoned".to_string())?;
+    Ok(workspace.display().to_string())
+}
+
+/// Point the editor at an explicit workspace directory chosen by the webview.
+///
+/// This is the text-input fallback to the native picker: the path still goes
+/// through `switch_workspace`, so it is canonicalised and checked to be a real
+/// directory before anything changes.
+#[tauri::command]
+fn set_workspace(state: tauri::State<'_, ShellState>, path: String) -> Result<String, String> {
+    state.switch_workspace(PathBuf::from(path))
+}
+
+/// Open the native folder picker and, if the user chooses a folder, switch the
+/// editor to it. Resolves to the new (canonicalised) workspace path, or `None`
+/// when the dialog was cancelled.
+#[tauri::command]
+async fn pick_workspace(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let (sender, receiver) = mpsc::channel::<Option<FilePath>>();
+
+    app.dialog()
+        .file()
+        .set_title("Escolha o projeto")
+        .pick_folder(move |folder_path| {
+            let _ = sender.send(folder_path);
+        });
+
+    // `pick_folder` invokes its callback on the main thread; `recv` blocks a
+    // runtime worker instead, so the dialog's event loop stays free to run.
+    let Some(file_path) = receiver.recv().ok().flatten() else {
+        return Ok(None);
+    };
+
+    let path = file_path
+        .into_path()
+        .map_err(|error| format!("caminho inválido: {error}"))?;
+
+    let state = app.state::<ShellState>();
+    Ok(Some(state.switch_workspace(path)?))
 }
 
 fn main() {
@@ -220,13 +306,16 @@ fn main() {
     let (notification_tx, notification_rx) = mpsc::channel::<Value>();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(ShellState::new(app_root, workspace_root, notification_tx))
         .invoke_handler(tauri::generate_handler![
             shell_info,
             workspace_info,
             core_boot_probe,
             core_handshake,
-            call_core_tool
+            call_core_tool,
+            set_workspace,
+            pick_workspace
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
