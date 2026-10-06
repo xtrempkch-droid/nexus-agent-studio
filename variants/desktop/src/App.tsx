@@ -785,16 +785,16 @@ export default function App() {
     [activeProviderId, providers],
   );
 
-  const modelOptions = useMemo<readonly ModelOption[]>(() => {
-    if (syncedModels.length === 0) {
-      return [{ id: '', label: 'Sincronize um provedor' }];
-    }
-    return syncedModels.map((name) => ({ id: name, label: name }));
-  }, [syncedModels]);
+  const modelOptions = useMemo<readonly ModelOption[]>(
+    () => syncedModels.map((name) => ({ id: name, label: name })),
+    [syncedModels],
+  );
 
+  // The model is now free text, so the label is the typed value itself; the
+  // synced list only feeds the autocomplete suggestions.
   const activeModelLabel = useMemo(
-    () => modelOptions.find((option) => option.id === activeModel)?.label ?? activeModel,
-    [modelOptions, activeModel],
+    () => (activeModel === '' ? 'sem modelo' : activeModel),
+    [activeModel],
   );
 
   const clearHints = useCallback(() => setHints([]), []);
@@ -1091,6 +1091,25 @@ export default function App() {
                 </div>
               </div>
 
+              <div>
+                <label htmlFor="model-name" className="mb-1 block font-medium text-slate-300">
+                  Modelo ativo (nome livre):
+                </label>
+                <input
+                  id="model-name"
+                  value={activeModel}
+                  onChange={(event) => setActiveModel(event.target.value)}
+                  placeholder="ex: qwen2.5:7b, gpt-4o, llama3.2"
+                  spellCheck={false}
+                  autoComplete="off"
+                  className="w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-slate-200 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
+                />
+                <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                  Digite qualquer modelo suportado pelo provedor. &ldquo;Sincronizar
+                  modelos&rdquo; abaixo só preenche as sugestões — não é obrigatório.
+                </p>
+              </div>
+
               <button
                 type="button"
                 onClick={() => void syncModels()}
@@ -1110,7 +1129,7 @@ export default function App() {
               {syncedModels.length > 0 && (
                 <div className="space-y-1">
                   <span className="font-medium text-slate-300">
-                    Modelos disponíveis — escolha o ativo:
+                    Modelos detectados — clique para usar:
                   </span>
                   {syncedModels.map((name) => (
                     <button

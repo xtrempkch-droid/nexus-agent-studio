@@ -245,16 +245,25 @@ node dist/core.mjs      # core como MCP server stdio
     mutex. **Verificado:** lint/typecheck/test/build:desktop verdes + teste no
     navegador; o `cargo check` completo do `main.rs` (inclui o plugin de diálogo)
     fica para o CI, que já instala as libs GTK necessárias.
+12. ✅ **Escolha livre de modelo.** O seletor do cabeçalho era um `<select>`
+    fechado que só listava os modelos devolvidos por `list_models`. Agora é um
+    **texto livre** (`<input list=…>` + `<datalist>`): o usuário digita qualquer
+    nome de modelo (ex.: `qwen2.5:7b`, `gpt-4o`, `llama3.2`) e a lista
+    sincronizada vira apenas autocomplete. O painel de configurações ganhou o
+    campo **"Modelo ativo (nome livre)"** com o mesmo estado, e o rodapé do chat
+    mostra o nome digitado. Nada no core mudou — `ask_agent` já aceitava `model`
+    como string livre; a restrição era só de UI.
 
 ---
 
-**Ao retomar.** O streaming da resposta do agente (§5 item 10) e a **escolha de
-projeto/pasta** (§5 item 11) foram implementados — o que resta é **melhoria**, em
-ordem de valor: (1) modelo maior no Ollama para qualidade/velocidade — escolha do
-dono, não conserto; (2) suportar `.gitignore` no `list_directory` (hoje é uma lista
-fixa); (3) era moderna da spec (§5 item 6-d); (4) fila de requisições no sidecar
-em vez do mutex bloqueante (§5 item 6-a). Para retomar comigo, ler §3 linhas 16–23
-(histórico recente) e `/memories/repo/build-and-verify.md` (armadilhas já pagas).
+**Ao retomar.** O streaming da resposta do agente (§5 item 10), a **escolha de
+projeto/pasta** (§5 item 11) e a **escolha livre de modelo** (§5 item 12) foram
+implementados — o que resta é **melhoria**, em ordem de valor: (1) modelo maior no
+Ollama para qualidade/velocidade — escolha do dono, não conserto; (2) suportar
+`.gitignore` no `list_directory` (hoje é uma lista fixa); (3) era moderna da spec
+(§5 item 6-d); (4) fila de requisições no sidecar em vez do mutex bloqueante
+(§5 item 6-a). Para retomar comigo, ler §3 linhas 16–23 (histórico recente) e
+`/memories/repo/build-and-verify.md` (armadilhas já pagas).
 
 ## 6. Decisões e correções em relação ao prompt original
 
