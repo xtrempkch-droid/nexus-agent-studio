@@ -1,72 +1,59 @@
-name: Build e Compilação Multiplataforma (TUI + Web)
+name: build
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [main]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    name: Compilar para ${{ matrix.os }}
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            tui_name: nexus-tui-linux
-            web_name: nexus-web-linux
-            tui_exe: nexus-tui-linux
-            web_exe: nexus-web-linux
-          - os: windows-latest
-            tui_name: nexus-tui-windows
-            web_name: nexus-web-windows
-            tui_exe: nexus-tui-windows.exe
-            web_exe: nexus-web-windows.exe
-          - os: macos-latest
-            tui_name: nexus-tui-macos
-            web_name: nexus-web-macos
-            tui_exe: nexus-tui-macos
-            web_exe: nexus-web-macos
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['22', '24']
 
     steps:
-    - name: Baixar o código do repositório
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Configurar o ambiente Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          # NOTE: re-enable `cache: npm` once package-lock.json is committed.
+          # setup-node fails outright when the cache is requested but no
+          # lockfile is present.
 
-    - name: Instalar dependências
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      shell: bash
+      # `npm ci` requires a committed lockfile. Until package-lock.json exists
+      # (it cannot be generated without Node.js installed), fall back to
+      # `npm install` so the pipeline stays green. Commit a lockfile — then this
+      # step can go back to a plain `npm ci`.
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "::warning::package-lock.json not found; using npm install. Commit a lockfile to restore reproducible installs."
+            npm install --no-audit --no-fund
+          fi
 
-    - name: Compilar Executável TUI (Terminal)
-      run: |
-        pyinstaller --onefile --name ${{ matrix.tui_name }} main.py
-      shell: bash
+      - name: Lint
+        run: npm run lint
 
-    - name: Compilar Executável WEB (Navegador com Static e Templates)
-      run: |
-        pyinstaller --onefile \
-          --add-data "templates:templates" \
-          --add-data "static:static" \
-          --name ${{ matrix.web_name }} web_app.py
-      shell: bash
+      - name: Typecheck
+        run: npm run typecheck
 
-    - name: Disponibilizar Executável TUI (Artefato)
-      uses: actions/upload-artifact@v4
-      with:
-        name: Executavel-TUI-${{ matrix.os }}
-        path: dist/${{ matrix.tui_exe }}
+      - name: Test
+        run: npm run test
 
-    - name: Disponibilizar Executável WEB (Artefato)
-      uses: actions/upload-artifact@v4
-      with:
-        name: Executavel-WEB-${{ matrix.os }}
-        path: dist/${{ matrix.web_exe }}
+      - name: Build (core)
+        run: npm run build

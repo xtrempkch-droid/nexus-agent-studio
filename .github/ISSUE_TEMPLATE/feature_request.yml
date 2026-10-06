@@ -1,0 +1,54 @@
+name: Feature request
+description: Propose a capability for NexusAgent Studio
+title: '[feature] '
+labels: ['enhancement', 'triage']
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case justification
+      description: Which problem does this solve, for whom, and why now?
+      placeholder: As a <role>, I need <capability> so that <outcome>.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behaviour
+    attributes:
+      label: Expected behaviour
+      description: Describe the desired behaviour, including inputs and outputs.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Architectural area
+      description: Where would this change land?
+      options:
+        - common (headless core)
+        - common/mcp (MCP tools)
+        - common/docker (sandbox)
+        - common/plugins
+        - variants/desktop
+        - docs / CI
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: architectural-impact
+    attributes:
+      label: Architectural impact
+      description: |
+        Does it affect the DOM-free constraint of `common/`? New dependencies?
+        Public API changes? WASM compatibility?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

@@ -1,0 +1,115 @@
+/*
+ * NexusAgent Studio — design tokens.
+ *
+ * Tailwind CSS v4 CSS-first configuration. There is intentionally NO
+ * `tailwind.config.js`: v4 declares the theme with `@theme` and dark mode with
+ * `@custom-variant`.
+ */
+
+@import 'tailwindcss';
+
+/* Dark mode is class-driven (the <html> element carries `dark`). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Fira Code', ui-monospace, SFMono-Regular, monospace;
+
+  /* Chrome palette, carried over from the reference layout. */
+  --color-ide-bg: #0b0f19;
+  --color-ide-sidebar: #070a12;
+  --color-ide-card: #131b2e;
+  --color-ide-editor: #0d1322;
+  --color-ide-border: #1d283a;
+  --color-ide-accent: #6366f1;
+  --color-ide-accent-hover: #4f46e5;
+  --color-ide-green: #10b981;
+  --color-ide-yellow: #f59e0b;
+  --color-ide-red: #ef4444;
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-ide-bg);
+    color: rgb(226 232 240);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: rgb(99 102 241 / 0.35);
+  }
+}
+
+@layer utilities {
+  /* IDE-style scrollbars. */
+  .scrollbar-ide::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-ide::-webkit-scrollbar-track {
+    background: var(--color-ide-sidebar);
+  }
+  .scrollbar-ide::-webkit-scrollbar-thumb {
+    background: #1e293b;
+    border-radius: 3px;
+  }
+  .scrollbar-ide::-webkit-scrollbar-thumb:hover {
+    background: #334155;
+  }
+
+  .glow-indigo {
+    box-shadow: 0 0 15px rgb(99 102 241 / 0.25);
+  }
+  .glow-amber {
+    box-shadow: 0 0 15px rgb(245 158 11 / 0.25);
+  }
+  .glow-emerald {
+    box-shadow: 0 0 15px rgb(16 185 129 / 0.25);
+  }
+
+  /* Diff rendering. */
+  .diff-added {
+    background-color: rgb(16 185 129 / 0.15);
+    border-left: 3px solid var(--color-ide-green);
+  }
+  .diff-removed {
+    background-color: rgb(239 68 68 / 0.15);
+    border-left: 3px solid var(--color-ide-red);
+  }
+
+  /* ANSI palette used by <TerminalOutput />. */
+  .ansi-bold {
+    font-weight: 600;
+  }
+  .ansi-red {
+    color: #f87171;
+  }
+  .ansi-green {
+    color: #34d399;
+  }
+  .ansi-yellow {
+    color: #fbbf24;
+  }
+  .ansi-blue {
+    color: #60a5fa;
+  }
+  .ansi-magenta {
+    color: #c084fc;
+  }
+  .ansi-cyan {
+    color: #22d3ee;
+  }
+  .ansi-white {
+    color: #e2e8f0;
+  }
+  .ansi-grey {
+    color: #64748b;
+  }
+}

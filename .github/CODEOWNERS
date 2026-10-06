@@ -1,0 +1,14 @@
+# Default owners for everything in the repository.
+*                       @core-dev
+
+# Desktop UI: design tokens (Tailwind v4 CSS-first `@theme`) and shell components.
+variants/desktop/src/styles/  @design-team
+variants/desktop/src/components/  @design-team
+
+# Core engine
+common/                 @core-dev
+plugins/                @core-dev
+
+# Build, CI and governance
+.github/                @core-dev
+docs/                   @core-dev

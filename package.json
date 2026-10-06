@@ -1,0 +1,44 @@
+{
+  "name": "nexus-agent-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "NexusAgent Studio - multiplatform code editor core with MCP, Docker sandbox and plugin system.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc --noEmit && esbuild common/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/core.mjs",
+    "build:desktop": "vite build variants/desktop",
+    "dev:desktop": "vite variants/desktop",
+    "start": "node dist/core.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/core": "^2.3.1",
+    "@modelcontextprotocol/server": "^2.3.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.12.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.2",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.12.0",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "typescript-eslint": "^8.71.1",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  }
+}
