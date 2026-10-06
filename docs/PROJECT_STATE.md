@@ -40,19 +40,21 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 
 ## 3. Bloqueio atual e como resolvê-lo
 
-| # | Bloqueio | Resolução |
+| # | Bloqueio | Estado / resolução |
 | --- | --- | --- |
-| 1 | Sem Node/npm na máquina local | **Use o GitHub como ambiente de build** — os runners têm Node. Veja §4. |
-| 2 | `package-lock.json` ausente → `npm ci` e `cache: npm` falhariam no CI | Já mitigado: o `build.yml` cai para `npm install` e não pede cache. Gere o lockfile com o workflow `bootstrap-lockfile` e **volte a usar `npm ci` + `cache: npm`**. |
-| 3 | `git push` requer credenciais (sem `gh` CLI, sem credential helper) | `gh auth login` **ou** `git push origin main` digitando as credenciais no terminal. Nunca coloque tokens em chat. |
+| 1 | Sem Node/npm na máquina local | **Contornado.** O GitHub é o ambiente de build — os runners têm Node. Veja §4. |
+| 2 | `package-lock.json` ausente → `npm ci` e `cache: npm` falhariam no CI | Mitigado: o `build.yml` cai para `npm install` e não pede cache. Gere o lockfile com o workflow `bootstrap-lockfile` e **volte a usar `npm ci` + `cache: npm`**. |
+| 3 | `git push` requer credenciais | ✅ **RESOLVIDO.** HTTPS não tinha credencial, mas a chave `~/.ssh/id_ed25519` já está autorizada na conta. O remote `origin` foi apontado para SSH: `git@github.com:xtrempkch-droid/nexus-agent-studio.git`. |
 | 4 | A UI desktop é uma **simulação** no browser | Falta a ponte IPC (Electron/Tauri) entre `variants/desktop` e `common/`. Ver §5. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
-1. Faça o push do commit local (`git status` mostra `ahead 1`).
+1. ✅ **Feito.** O projeto foi enviado para `main` (`git push origin main`).
 2. O workflow **`build`** roda automaticamente em `push`/`pull_request` para `main`,
    na matriz `ubuntu / windows / macos` × `node 22 / 24`, executando:
-   `lint → typecheck → test → build`.
+   `lint → typecheck → test → build`. Esta é a **primeira execução real do
+   TypeScript** contra os tipos do SDK — espere encontrar algo para corrigir.
+   Acompanhe em: <https://github.com/xtrempkch-droid/nexus-agent-studio/actions>.
 3. Para gerar o lockfile sem Node local: **Actions → bootstrap-lockfile → Run workflow**.
    Baixe o artefato `package-lock` e commite como `package-lock.json`.
 4. Depois disso, no `build.yml`: troque o passo de install por `npm ci` e
