@@ -33,16 +33,21 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 | 4 | Arquitetura de plugins | ✅ completo | ⏳ não executado |
 | 5 | Configuração e build | ✅ completo | ⏳ não executado |
 
-**Resumo honesto:** todo o código está escrito. A máquina onde ele foi produzido
+**Resumo honesto: o pipeline está VERDE.** A máquina onde o código foi produzido
 **não tem `node` nem `npm`** e não há `sudo` sem senha, então nada roda localmente —
-o **GitHub Actions é o ambiente de build** (§4). Estado real no CI:
+o **GitHub Actions é o ambiente de build** (§4). No run **37402844523** (commit
+`51e61a3`) os **6 jobs** (ubuntu / windows / macos × node 22 / 24) passaram com
+**todos os passos verdes**:
 
-- ✅ `npm install` — passa (run 37402173198).
+- ✅ `npm install` — passa.
 - ✅ `npm run lint` — passa.
-- ✅ `npm run typecheck` — **executa** e já acusou 6 erros, todos corrigidos (§3, linhas 7–8).
-- ⏳ `npm run test` — **nunca executou**: o typecheck falhava antes, então os 8
-  arquivos de teste **nunca rodaram de verdade**.
-- ⏳ `npm run build` — **nunca executou**, pelo mesmo motivo.
+- ✅ `npm run typecheck` — passa (depois de corrigir os 6 erros do run 37402173198; §3, linhas 7–8).
+- ✅ `npm run test` — **passa**. Primeira execução real do Vitest.
+- ✅ `npm run build` — **passa**. Primeira execução real do esbuild; gerou `dist/core.mjs`.
+
+A coluna **"Verificado em runtime"** da tabela acima continua ⏳ de propósito: o
+código passa no CI, mas o servidor MCP ainda não foi conectado a um cliente real,
+nem a UI a um backend (falta a ponte IPC). Compilar não é o mesmo que funcionar.
 
 ## 3. Bloqueio atual e como resolvê-lo
 
@@ -81,8 +86,9 @@ node dist/core.mjs      # core como MCP server stdio
 
 ## 5. Próximos passos (ordem sugerida)
 
-1. Rodar o CI e **corrigir o que ele apontar** (é a primeira execução real do
-   TypeScript contra os tipos do SDK).
+1. ✅ **Pipeline verde no run 37402844523** — os 6 jobs (ubuntu / windows / macos ×
+   node 22 / 24) passaram em `lint`, `typecheck`, `test` e `build`. Não há erro
+   pendente no CI. **O único item aberto que exige ação humana é o passo 4.**
 2. ✅ **Risco descartado com evidência — não reabra esta investigação.** Em
    `common/mcp/server.ts`, `build()` passa `inputSchema: tool.definition.inputSchema`
    (tipado como `z.ZodType`) para `McpServer.registerTool`, cuja assinatura v2 aceita
@@ -91,19 +97,29 @@ node dist/core.mjs      # core como MCP server stdio
    o `z.ZodType` do zod v4 satisfaz o `StandardSchemaWithJSON`. O cast `as never` do
    handler também está OK (`cb` aceita a união
    `ToolCallback<...> | LegacyToolCallback<ZodRawShape>`). **Nenhuma mudança necessária.**
-3. ⚠️ **Próximo ponto desconhecido: a primeira execução do Vitest.** O passo `Test`
-   nunca rodou (o typecheck falhava antes). Não há I/O real nos 8 arquivos de teste
-   (só `node:path` em `pathGuard.test.ts`), então a expectativa é que passem — mas
-   isso **ainda não é um fato verificado**. Se falharem, o erro real aparece no passo `Test`.
-4. Gerar o `package-lock.json` e endurecer o CI de volta (`npm ci` + cache).
+3. ✅ **Vitest verificado.** O passo `Test` rodou pela primeira vez e passou. Isso é
+   informativo por um detalhe do Vitest: com **zero** arquivos de teste descobertos ele
+   **sai com código 1**, então o sucesso prova que os 8 arquivos foram encontrados e
+   passaram. O CI, porém, não publica a contagem de testes — para vê-la, rode
+   `npm run test` localmente.
+4. **Pendência que exige ação humana:** gerar o `package-lock.json` e endurecer o CI de
+   volta (`npm ci` + `cache: npm`). Duas formas: (a) **Actions → bootstrap-lockfile →
+   Run workflow**, baixar o artefato `package-lock` e commitá-lo; ou (b) rodar
+   `npm install` numa máquina com Node ≥ 22 e commitar o lockfile gerado. Baixar
+   artefato do Actions **exige autenticação**, por isso este passo não pode ser
+   concluído de dentro deste ambiente.
 5. Construir a ponte IPC (`variants/desktop` ↔ `common/`) — hoje a UI roda uma
    simulação determinística marcada em `variants/desktop/src/App.tsx`.
 6. Avaliar se o Monaco volta a ser usado (foi trocado por `<textarea>` para não
    adicionar dependência não verificada).
-7. **Aviso de depreciação no CI (não bloqueia):** `actions/checkout@v4` e
-   `actions/setup-node@v4` miram o Node 20, que está deprecado nos runners; o GitHub
-   força a execução no Node 24 e emite `::warning::`. Trocar por `@v5` quando for
-   conveniente, **depois de confirmar que a tag existe** (regra nº 1 do `AGENTS.md`).
+7. ✅ **Aviso de depreciação resolvido.** `actions/checkout@v4`,
+   `actions/setup-node@v4` e `actions/upload-artifact@v4` miravam o Node 20, deprecado
+   nos runners. Todos foram para `@v5`, **depois de confirmar as tags** com
+   `git ls-remote` (`checkout` 5.1.0, `setup-node` 5.0.0, `upload-artifact` 5.0.0).
+8. *(Opcional)* `common/mcp/types.ts` exporta um `AnyToolHandler` que **colide de nome**
+   com o `AnyToolHandler` exportado pelo SDK v2 (semânticas diferentes; não gera erro
+   porque são namespaces distintos). Renomear o local para `ErasedToolHandler` reduz a
+   ambiguidade para quem ler o código depois.
 
 ## 6. Decisões e correções em relação ao prompt original
 
