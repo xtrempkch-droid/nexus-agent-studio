@@ -27,27 +27,32 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 
 | Fase | Escopo | Código | Verificado em runtime |
 | --- | --- | --- | --- |
-| 1 | Infra, CI/CD, governança | ✅ completo | ⏳ não executado |
-| 2 | Core TypeScript (`common/`) | ✅ completo | ⏳ não executado |
-| 3 | Sandbox Docker + IPC | ✅ completo | ⏳ não executado |
-| 4 | Arquitetura de plugins | ✅ completo | ⏳ não executado |
-| 5 | Configuração e build | ✅ completo | ⏳ não executado |
+| 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` |
+| 2 | Core TypeScript (`common/`) | ✅ completo | 🟡 parcial: o servidor MCP é exercitado ponta a ponta; temas e plugins só em teste unitário |
+| 3 | Sandbox Docker + IPC | ✅ completo | ❌ nunca: `run_terminal_command` jamais foi invocado (não há Docker no CI) e a ponte IPC não existe |
+| 4 | Arquitetura de plugins | ✅ completo | 🟡 parcial: registro/unload cobertos por teste, mas **nenhum plugin real foi carregado** |
+| 5 | Configuração e build | ✅ completo | 🟡 core sim, UI não: `dist/core.mjs` é construído e executado; `npm run build:desktop` **não roda no CI** |
 
-**Resumo honesto: o pipeline está VERDE.** A máquina onde o código foi produzido
-**não tem `node` nem `npm`** e não há `sudo` sem senha, então nada roda localmente —
-o **GitHub Actions é o ambiente de build** (§4). No run **37402844523** (commit
-`51e61a3`) os **6 jobs** (ubuntu / windows / macos × node 22 / 24) passaram com
-**todos os passos verdes**:
+**Resumo honesto: o pipeline está VERDE e agora prova que o servidor roda.** A
+máquina onde o código foi produzido **não tem `node` nem `npm`** e não há `sudo` sem
+senha, então nada roda localmente — o **GitHub Actions é o ambiente de build** (§4).
+No run **37404728248** (commit `ab839aa`) os **6 jobs** (ubuntu / windows / macos ×
+node 22 / 24) passaram com **todos os passos verdes**:
 
-- ✅ `npm install` — passa.
+- ✅ `npm ci` — instala exatamente o que o lockfile fixa.
 - ✅ `npm run lint` — passa.
 - ✅ `npm run typecheck` — passa (depois de corrigir os 6 erros do run 37402173198; §3, linhas 7–8).
-- ✅ `npm run test` — **passa**. Primeira execução real do Vitest.
-- ✅ `npm run build` — **passa**. Primeira execução real do esbuild; gerou `dist/core.mjs`.
+- ✅ `npm run test` — passa (Vitest, 8 arquivos).
+- ✅ `npm run build` — passa; gera `dist/core.mjs`.
+- ✅ `npm run smoke` — passa nos 3 SOs, inclusive **Windows**.
 
-A coluna **"Verificado em runtime"** da tabela acima continua ⏳ de propósito: o
-código passa no CI, mas o servidor MCP ainda não foi conectado a um cliente real,
-nem a UI a um backend (falta a ponte IPC). Compilar não é o mesmo que funcionar.
+**O que o smoke test realmente prova** (não é só "passou"): ele sobe o
+`dist/core.mjs` de produção e o dirige com um cliente MCP real via stdio. O handshake
+completa; `tools/list` devolve **exatamente** as 5 tools esperadas — o que só é
+possível se o SDK converter cada schema Zod em JSON Schema **em runtime**, coisa que o
+typecheck não prova; `read_file` lê o `package.json`; uma chamada **sem o argumento
+obrigatório** é rejeitada com `isError: true` **antes** do handler rodar; um caminho
+com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 
 ## 3. Bloqueio atual e como resolvê-lo
 
@@ -61,13 +66,15 @@ nem a UI a um backend (falta a ponte IPC). Compilar não é o mesmo que funciona
 | 6 | `npm run lint` acusou 1 erro (run 37401758113) | ✅ **CORRIGIDO.** `defaultImage` era declarado mas ignorado em `createTerminalTools` — o schema fixava `DEFAULT_SANDBOX_IMAGE`, então `CoreOptions.sandboxImage` só afetava o `TerminalRunner` e **não** a tool `run_terminal_command`. Agora o schema usa `defaultImage`. Era bug real, não só ruído de lint. |
 | 7 | `npm run typecheck`: falta de declaração de módulo (run 37402173198) | ✅ **CORRIGIDO.** `variants/desktop/src/main.tsx:10` → `Cannot find module or type declarations for side-effect import of './styles/theme.css'`. Causa: **não existia nenhum `.d.ts` no projeto**, então o import de CSS não resolvia. Criado `variants/desktop/src/vite-env.d.ts` com `/// <reference types="vite/client" />` — o `client.d.ts` do Vite declara `declare module '*.css' {}` (verificado em `vite@8.3.2`, cujo `package.json` expõe `exports["./client"] = { types: "./client.d.ts" }`). `.d.ts` é ignorado pelo ESLint, então a triple-slash reference não viola nenhuma regra. |
 | 8 | `npm run typecheck`: 5 erros em `common/mcp/server.test.ts` | ✅ **CORRIGIDO.** Linhas 87/92/96/111/116, todos a mesma causa: os dois `const handler` extraídos perdiam a **tipagem contextual**, então `type: 'text'` **alargava para `string`** e o retorno deixava de ser atribuível a `TextContentBlock`. Os arrows inline (linhas 25/63/75) **não** erravam — prova de que a causa era o literal solto, não a API. Corrigido usando o helper `textResult` que já era exportado. **Os tipos da lib estavam corretos; o teste é que estava.** |
+| 9 | `build()` e `serveStdio()` sem cobertura de runtime | ✅ **RESOLVIDO.** Nenhum dos 8 arquivos de teste chamava `build()` nem `serveStdio()` — as duas apareciam apenas no bootstrap (`common/index.ts`) e em comentários. Ou seja, a fronteira com o SDK v2, a parte mais arriscada do projeto, **nunca havia executado**: o typecheck provava só que os tipos encaixam, não que o SDK converte os schemas Zod em runtime. Criado `scripts/smoke-mcp.ts` + o passo `Smoke test (MCP over stdio)` no CI (depois do build, pois sobe `dist/core.mjs`). Run 37404728248: verde nos 6 jobs, inclusive Windows. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
 1. ✅ **Feito.** O projeto foi enviado para `main` (`git push origin main`).
 2. O workflow **`build`** roda automaticamente em `push`/`pull_request` para `main`,
    na matriz `ubuntu / windows / macos` × `node 22 / 24`, executando:
-   `npm ci → lint → typecheck → test → build`.
+   `npm ci → lint → typecheck → test → build → smoke`. O `smoke` vem **depois** do
+   `build` porque sobe `dist/core.mjs`, que só existe depois de ser construído.
    Acompanhe em: <https://github.com/xtrempkch-droid/nexus-agent-studio/actions>.
 3. ✅ **Lockfile no lugar.** O `package-lock.json` está commitado na raiz e o
    `build.yml` usa `npm ci` + `cache: npm`.
@@ -83,15 +90,16 @@ Verificação local (quando houver Node ≥ 22):
 ```bash
 npm install
 npm run lint && npm run typecheck && npm run test && npm run build
+npm run smoke           # sobe dist/core.mjs e o dirige com um cliente MCP real
 npm run dev:desktop     # UI em http://localhost:5173
 node dist/core.mjs      # core como MCP server stdio
 ```
 
 ## 5. Próximos passos (ordem sugerida)
 
-1. ✅ **Pipeline verde no run 37402844523** — os 6 jobs (ubuntu / windows / macos ×
-   node 22 / 24) passaram em `lint`, `typecheck`, `test` e `build`. Não há erro
-   pendente no CI.
+1. ✅ **Pipeline verde no run 37404728248** — os 6 jobs (ubuntu / windows / macos ×
+   node 22 / 24) passaram em `npm ci`, `lint`, `typecheck`, `test`, `build` e `smoke`.
+   Não há erro pendente no CI.
 2. ✅ **Risco descartado com evidência — não reabra esta investigação.** Em
    `common/mcp/server.ts`, `build()` passa `inputSchema: tool.definition.inputSchema`
    (tipado como `z.ZodType`) para `McpServer.registerTool`, cuja assinatura v2 aceita
@@ -109,15 +117,21 @@ node dist/core.mjs      # core como MCP server stdio
    artefato veio do workflow `bootstrap-lockfile`, foi extraído, **validado contra o
    `package.json`** e só então commitado — commitar um lockfile defasado quebraria o
    `npm ci` justamente no passo que se queria endurecer.
-5. Construir a ponte IPC (`variants/desktop` ↔ `common/`) — hoje a UI roda uma
+5. ⚠️ **Próximo ponto cego: a UI nunca foi empacotada pelo bundler de produção.**
+   `npm run build:desktop` **não está no CI**, então o Vite (com `@tailwindcss/vite`,
+   `@vitejs/plugin-react` e o alias `@core`) jamais compilou a interface. O `tsc` a
+   aprova, mas aprovar tipos não é o mesmo que o Vite resolver os plugins, o `@theme`
+   do Tailwind v4 e os assets. Passo barato: um passo `Build (desktop)` rodando
+   `npm run build:desktop`.
+6. Construir a ponte IPC (`variants/desktop` ↔ `common/`) — hoje a UI roda uma
    simulação determinística marcada em `variants/desktop/src/App.tsx`.
-6. Avaliar se o Monaco volta a ser usado (foi trocado por `<textarea>` para não
+7. Avaliar se o Monaco volta a ser usado (foi trocado por `<textarea>` para não
    adicionar dependência não verificada).
-7. ✅ **Aviso de depreciação resolvido.** `actions/checkout@v4`,
+8. ✅ **Aviso de depreciação resolvido.** `actions/checkout@v4`,
    `actions/setup-node@v4` e `actions/upload-artifact@v4` miravam o Node 20, deprecado
    nos runners. Todos foram para `@v5`, **depois de confirmar as tags** com
    `git ls-remote` (`checkout` 5.1.0, `setup-node` 5.0.0, `upload-artifact` 5.0.0).
-8. *(Opcional)* `common/mcp/types.ts` exporta um `AnyToolHandler` que **colide de nome**
+9. *(Opcional)* `common/mcp/types.ts` exporta um `AnyToolHandler` que **colide de nome**
    com o `AnyToolHandler` exportado pelo SDK v2 (semânticas diferentes; não gera erro
    porque são namespaces distintos). Renomear o local para `ErasedToolHandler` reduz a
    ambiguidade para quem ler o código depois.
