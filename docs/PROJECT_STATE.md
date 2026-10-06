@@ -71,6 +71,7 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 | 11 | O host desktop não existia (ponte IPC sem lugar para viver) | ✅ **RESOLVIDO.** Criado `src-tauri/` (`Cargo.toml`, `tauri.conf.json`, `capabilities/default.json`, ícone, um único comando `shell_info`) sob um workflow `tauri` **separado**, que roda `cargo check` só quando `src-tauri/**` ou `variants/desktop/**` mudam — compilar Tauri leva minutos e não deve travar o loop rápido do TypeScript. O passo captura a saída do cargo e a reemite como `::error::`, porque log bruto do Actions exige autenticação e anotação não: sem isso, uma falha do Rust seria só um X vermelho. Run do commit `641fa13`: **`cargo check` verde**. Run de `fb2cff6`: **`cargo check` e `cargo test` verdes**. |
 | 12 | **Eu inventei três métodos de API do Rust** | ✅ **CORRIGIDO e confirmado verde — leia isto antes de escrever Rust aqui.** Usei `command.get_stdin()`, `get_stdout()` e `get_stderr()` afirmando que existiam desde o Rust 1.57. Existem `get_program`, `get_args` e `get_current_dir` — mas **os três getters de stream não existem**. O CI apontou `error[E0599]` nas três linhas. É exatamente o erro que a regra nº 1 do `AGENTS.md` existe para pegar, e eu caí nele por confiar na memória em vez de conferir. Substituído por testes **comportamentais** (sobem `printf`/`sh` de verdade e leem stdout/stdin/stderr), que provam **mais** do que introspecção provaria. O canal de `::error::` no workflow `tauri` foi o que tornou isso diagnosticável sem acesso ao log bruto. |
 | 13 | O Rust não falava MCP | ✅ **RESOLVIDO e confirmado.** `src-tauri/src/mcp.rs` implementa `initialize` + `notifications/initialized` + `tools/list` sobre JSON-RPC delimitado por linha, com loop de leitura por `id` (pulando notificações no canal compartilhado), timeout por passo e shutdown fechando o `stdin` primeiro (o sinal gracioso portável da spec). O teste end-to-end sobe o core **real** e afirma as 5 tools; CI verde. **Fato medido, não suposto:** a anotação `::notice::` reportou `negotiated protocol 2025-11-25, 5 tools`. O core **não aceita** `2026-07-28` no handshake legado — ele negocia para **2025-11-25**. Se eu tivesse *afirmado* a versão em vez de *pedi-la*, o teste teria falhado **com o handshake funcionando**. Corolário: para usar recursos da era 2026-07-28 é preciso o fluxo moderno (`server/discover` + metadados em `_meta`), porque a era moderna **não tem** handshake `initialize` para negociar. |
+| 14 | Cada comando abria e matava um core | ✅ **RESOLVIDO e confirmado.** `ShellState` guarda `Mutex<Option<CoreSession>>`: sobe no primeiro uso, reutiliza, e **substitui se o processo morreu** — a spec diz que o cliente *deveria* reiniciar um servidor que saiu inesperadamente, e o protocolo é stateless. Adicionado `tools/call` e o comando `call_core_tool`. A anotação `::notice::` do run confirmou o caminho completo: `2025-11-25, 5 tools, tools/call ok`. **Limitação conhecida e documentada:** o mutex serializa as chamadas (obrigatório, porque stdio é um canal único), então uma tool lenta bloqueia as outras — uma fila de requisições está na §5. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -123,17 +124,27 @@ node dist/core.mjs      # core como MCP server stdio
    `npm ci` justamente no passo que se queria endurecer.
 5. ✅ **`Build (desktop)` no CI** (commit `29b9e0a`): o Vite agora empacota a UI de
    verdade. Resultado do run ainda não conferido (§3, linha 10).
-6. 🟡 **O sidecar fala MCP; falta a sessão longa e a era moderna.** O
-   `src-tauri/src/mcp.rs` conversa de verdade com o core: `initialize`,
-   `notifications/initialized` e `tools/list`, com o teste end-to-end subindo o core real
-   (CI verde, anotação reportando `2025-11-25`, 5 tools).
+6. 🟡 **O sidecar conversa MCP, com sessão longa. Falta ligar a UI.**
+   `src-tauri/src/mcp.rs` faz `initialize`, `notifications/initialized`,
+   `tools/list` e `tools/call`; `ShellState` mantém **uma** sessão, reutilizada e
+   reiniciada se o processo morrer. O teste end-to-end sobe o core real e chama
+   `read_file`, e a anotação do run confirma: `2025-11-25, 5 tools, tools/call ok`.
 
-   **O que ainda falta:** (a) cada comando abre e fecha um core — a **sessão longa**
-   (um processo só, reutilizado) é o próximo passo; (b) a **era moderna** da spec
-   2026-07-28, que exige o probe `server/discover` e metadados por requisição em `_meta`
-   — quando ela for implementada, respeite a regra: cair para o `initialize` em
-   **qualquer** erro não reconhecido, nunca em um código específico; (c) trocar a
-   simulação de `variants/desktop/src/App.tsx` por chamadas reais ao shell.
+   **Próximos passos, em ordem:**
+   - **(a) Fila de requisições** em vez do mutex bloqueante. Hoje uma tool lenta
+     (o terminal Docker) trava todas as outras, porque stdio é um canal único. O
+     certo é uma fila com mapa `id → oneshot`, mantendo a serialização do canal
+     mas libertando o chamador.
+   - **(b) Ligar a UI** — trocar a simulação de `variants/desktop/src/App.tsx` por
+     chamadas reais aos comandos `core_handshake` e `call_core_tool`. **Decisão
+     pendente que exige ação humana:** usar `@tauri-apps/api` como devDependency
+     **invalida o `package-lock.json`** e quebra o `npm ci` (ver §3, linha 2); a
+     alternativa sem dependência nova é `app.withGlobalTauri: true` e chamar
+     `window.__TAURI__.core.invoke`.
+   - **(c) Era moderna** da spec 2026-07-28, que exige o probe `server/discover` e
+     metadados por requisição em `_meta`. Ao implementar, respeite a regra: cair
+     para o `initialize` em **qualquer** erro não reconhecido, nunca em um código
+     específico.
 
    Decisão registrada: **sidecar** (não reimplementar o core em Rust), preservando o
    `common/` headless. O custo é exigir um runtime Node na máquina, ou empacotar um.
