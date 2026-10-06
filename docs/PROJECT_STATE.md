@@ -33,10 +33,16 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 | 4 | Arquitetura de plugins | ✅ completo | ⏳ não executado |
 | 5 | Configuração e build | ✅ completo | ⏳ não executado |
 
-**Resumo honesto:** todo o código está escrito e passou por **validação estática**
-(TS server: sem erros de sintaxe/estrutura). **Nenhum** `lint`, `typecheck`,
-`test` ou `build` foi executado, porque a máquina onde o código foi produzido
-**não tem `node` nem `npm`** e não há `sudo` sem senha.
+**Resumo honesto:** todo o código está escrito. A máquina onde ele foi produzido
+**não tem `node` nem `npm`** e não há `sudo` sem senha, então nada roda localmente —
+o **GitHub Actions é o ambiente de build** (§4). Estado real no CI:
+
+- ✅ `npm install` — passa (run 37402173198).
+- ✅ `npm run lint` — passa.
+- ✅ `npm run typecheck` — **executa** e já acusou 6 erros, todos corrigidos (§3, linhas 7–8).
+- ⏳ `npm run test` — **nunca executou**: o typecheck falhava antes, então os 8
+  arquivos de teste **nunca rodaram de verdade**.
+- ⏳ `npm run build` — **nunca executou**, pelo mesmo motivo.
 
 ## 3. Bloqueio atual e como resolvê-lo
 
@@ -48,6 +54,8 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 | 4 | A UI desktop é uma **simulação** no browser | Falta a ponte IPC (Electron/Tauri) entre `variants/desktop` e `common/`. Ver §5. |
 | 5 | `npm install` falhava no CI (run #34, os 6 jobs) | ✅ **RESOLVIDO e confirmado.** Causa: `typescript-eslint@8.71.1` declara `peerDependencies.typescript: ">=4.8.4 <6.1.0"` e eu havia declarado `typescript ^7.0.2` → `ERESOLVE`, exit 1 no passo de install, com `lint`/`typecheck`/`test`/`build` **skipped**. Agora `typescript: "~6.0.2"` e o install passa. |
 | 6 | `npm run lint` acusou 1 erro (run 37401758113) | ✅ **CORRIGIDO.** `defaultImage` era declarado mas ignorado em `createTerminalTools` — o schema fixava `DEFAULT_SANDBOX_IMAGE`, então `CoreOptions.sandboxImage` só afetava o `TerminalRunner` e **não** a tool `run_terminal_command`. Agora o schema usa `defaultImage`. Era bug real, não só ruído de lint. |
+| 7 | `npm run typecheck`: falta de declaração de módulo (run 37402173198) | ✅ **CORRIGIDO.** `variants/desktop/src/main.tsx:10` → `Cannot find module or type declarations for side-effect import of './styles/theme.css'`. Causa: **não existia nenhum `.d.ts` no projeto**, então o import de CSS não resolvia. Criado `variants/desktop/src/vite-env.d.ts` com `/// <reference types="vite/client" />` — o `client.d.ts` do Vite declara `declare module '*.css' {}` (verificado em `vite@8.3.2`, cujo `package.json` expõe `exports["./client"] = { types: "./client.d.ts" }`). `.d.ts` é ignorado pelo ESLint, então a triple-slash reference não viola nenhuma regra. |
+| 8 | `npm run typecheck`: 5 erros em `common/mcp/server.test.ts` | ✅ **CORRIGIDO.** Linhas 87/92/96/111/116, todos a mesma causa: os dois `const handler` extraídos perdiam a **tipagem contextual**, então `type: 'text'` **alargava para `string`** e o retorno deixava de ser atribuível a `TextContentBlock`. Os arrows inline (linhas 25/63/75) **não** erravam — prova de que a causa era o literal solto, não a API. Corrigido usando o helper `textResult` que já era exportado. **Os tipos da lib estavam corretos; o teste é que estava.** |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -75,20 +83,27 @@ node dist/core.mjs      # core como MCP server stdio
 
 1. Rodar o CI e **corrigir o que ele apontar** (é a primeira execução real do
    TypeScript contra os tipos do SDK).
-2. **Ponto de maior incerteza (typecheck):** em `common/mcp/server.ts`, `build()` passa
-   `inputSchema: tool.definition.inputSchema` (tipado como `z.ZodType`) para
-   `McpServer.registerTool`. A assinatura real do SDK (v2, verificada no fonte
-   `packages/server/src/server/mcp.ts`) aceita
-   `inputSchema?: StandardSchemaWithJSON | ZodRawShape` e
-   `cb: ToolCallback<StandardSchemaWithJSON | undefined> | LegacyToolCallback<ZodRawShape>`.
-   O handler já passa por um cast `as never` (válido para essa união), mas **se
-   `z.ZodType` não for atribuível a `StandardSchemaWithJSON` o typecheck vai falhar
-   aqui** — é o primeiro lugar a olhar. Não invente a assinatura: confira a doc.
-3. Gerar o `package-lock.json` e endurecer o CI de volta (`npm ci` + cache).
-4. Construir a ponte IPC (`variants/desktop` ↔ `common/`) — hoje a UI roda uma
+2. ✅ **Risco descartado com evidência — não reabra esta investigação.** Em
+   `common/mcp/server.ts`, `build()` passa `inputSchema: tool.definition.inputSchema`
+   (tipado como `z.ZodType`) para `McpServer.registerTool`, cuja assinatura v2 aceita
+   `inputSchema?: StandardSchemaWithJSON | ZodRawShape`. Eu havia marcado isso como o
+   ponto mais provável de falha; **o typecheck do run 37402173198 não acusou nada ali** —
+   o `z.ZodType` do zod v4 satisfaz o `StandardSchemaWithJSON`. O cast `as never` do
+   handler também está OK (`cb` aceita a união
+   `ToolCallback<...> | LegacyToolCallback<ZodRawShape>`). **Nenhuma mudança necessária.**
+3. ⚠️ **Próximo ponto desconhecido: a primeira execução do Vitest.** O passo `Test`
+   nunca rodou (o typecheck falhava antes). Não há I/O real nos 8 arquivos de teste
+   (só `node:path` em `pathGuard.test.ts`), então a expectativa é que passem — mas
+   isso **ainda não é um fato verificado**. Se falharem, o erro real aparece no passo `Test`.
+4. Gerar o `package-lock.json` e endurecer o CI de volta (`npm ci` + cache).
+5. Construir a ponte IPC (`variants/desktop` ↔ `common/`) — hoje a UI roda uma
    simulação determinística marcada em `variants/desktop/src/App.tsx`.
-5. Avaliar se o Monaco volta a ser usado (foi trocado por `<textarea>` para não
+6. Avaliar se o Monaco volta a ser usado (foi trocado por `<textarea>` para não
    adicionar dependência não verificada).
+7. **Aviso de depreciação no CI (não bloqueia):** `actions/checkout@v4` e
+   `actions/setup-node@v4` miram o Node 20, que está deprecado nos runners; o GitHub
+   força a execução no Node 24 e emite `::warning::`. Trocar por `@v5` quando for
+   conveniente, **depois de confirmar que a tag existe** (regra nº 1 do `AGENTS.md`).
 
 ## 6. Decisões e correções em relação ao prompt original
 

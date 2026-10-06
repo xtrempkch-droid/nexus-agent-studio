@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as z from 'zod/v4';
 import { CORE_PLUGIN_ID, InternalMCPServer } from './server.ts';
+import { textResult } from './types.ts';
 
 function createServer(): InternalMCPServer {
   return new InternalMCPServer({ name: 'test-server', version: '9.9.9' });
@@ -79,7 +80,11 @@ describe('InternalMCPServer dynamic plugin tools', () => {
 
   it('unregisters every tool owned by a plugin', () => {
     const server = createServer();
-    const handler = () => ({ content: [{ type: 'text', text: 'ok' }] });
+    // Built with the exported helper rather than an inline object literal. A
+    // standalone `const` gets no contextual type, so an inline literal's
+    // `type: 'text'` would widen to `string` and stop being assignable to
+    // `ToolResult`.
+    const handler = () => textResult('ok');
 
     server.registerDynamicTool(
       'acme.plugin',
@@ -103,7 +108,7 @@ describe('InternalMCPServer dynamic plugin tools', () => {
 
   it('leaves other plugins untouched', () => {
     const server = createServer();
-    const handler = () => ({ content: [{ type: 'text', text: 'ok' }] });
+    const handler = () => textResult('ok');
 
     server.registerDynamicTool(
       'one',
