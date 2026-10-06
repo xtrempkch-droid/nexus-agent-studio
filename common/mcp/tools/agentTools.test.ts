@@ -113,4 +113,50 @@ describe('createAgentTools', () => {
     const parsed = JSON.parse(resultText(result)) as { answer: string };
     expect(parsed.answer).toBe('pronto');
   });
+
+  it('honours a caller-supplied step budget', async () => {
+    // The budget is the other half of "the agent stopped before finishing": each
+    // step is one tool call, so a task that writes several files needs a step per
+    // file. A model that keeps asking for tools must therefore be cut off at the
+    // requested number of round trips, not at the built-in default.
+    const alwaysCallsTool = '{"tool":"read_file","arguments":{"path":"a.ts"}}';
+
+    const runWith = async (maxSteps: number): Promise<number> => {
+      const [agent] = createAgentTools({
+        tools: [READ_TOOL],
+        streamFetcher: scriptedFetcher(alwaysCallsTool),
+      });
+      if (agent === undefined) {
+        throw new Error('createAgentTools returned no tool');
+      }
+      const result = await agent.handler({
+        prompt: 'leia para sempre',
+        model: 'm',
+        baseUrl: 'http://x',
+        kind: 'ollama',
+        maxSteps,
+      });
+      return (JSON.parse(resultText(result)) as { steps: number }).steps;
+    };
+
+    expect(await runWith(2)).toBe(2);
+    expect(await runWith(9)).toBe(9);
+  });
+
+  it('rejects a step budget outside the accepted range', async () => {
+    // The schema is the user-facing gate: out of range must be `isError` before
+    // the handler runs, instead of a silently clamped budget.
+    const [agent] = createAgentTools({ tools: [READ_TOOL] });
+    if (agent === undefined) {
+      throw new Error('createAgentTools returned no tool');
+    }
+
+    const schema = agent.definition.inputSchema;
+    const base = { model: 'm', baseUrl: 'http://x' };
+    expect(schema.safeParse({ ...base, maxSteps: 0 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, maxSteps: 999 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, maxSteps: 12 }).success).toBe(true);
+    // Omitted must fall back to the loop's own default, not to `undefined`.
+    expect(schema.safeParse(base)).toMatchObject({ data: { maxSteps: 6 } });
+  });
 });
