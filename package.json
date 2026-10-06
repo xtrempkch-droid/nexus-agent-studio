@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc --noEmit && esbuild common/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/core.mjs",
+    "smoke": "tsx scripts/smoke-mcp.ts",
     "build:desktop": "vite build variants/desktop",
     "dev:desktop": "vite variants/desktop",
     "start": "node dist/core.mjs"

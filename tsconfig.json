@@ -26,6 +26,6 @@
       "@core/*": ["./common/*"]
     }
   },
-  "include": ["common/**/*", "variants/**/*", "plugins/**/*"],
+  "include": ["common/**/*", "variants/**/*", "plugins/**/*", "scripts/**/*"],
   "exclude": ["node_modules", "dist"]
 }

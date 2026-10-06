@@ -48,3 +48,9 @@ jobs:
 
       - name: Build (core)
         run: npm run build
+
+      # Must run after the build: it spawns dist/core.mjs. A typecheck proves the
+      # SDK types line up; only this proves the server actually serves.
+      - name: Smoke test (MCP over stdio)
+        run: npm run smoke
+        timeout-minutes: 5
