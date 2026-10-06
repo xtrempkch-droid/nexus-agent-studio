@@ -16,3 +16,4 @@ export type { DockerRunResult } from '@core/docker/sandbox.ts';
 export type { CompilerDiagnostic } from '@core/docker/compilerErrorParser.ts';
 export type { EditorContext, CursorPosition, TextSelection } from '@core/mcp/tools/editorTools.ts';
 export type { ThemeObject, ThemeTokens } from '@core/themes/themeManager.ts';
+export type { AgentProgressEvent } from '@core/agent/agentLoop.ts';

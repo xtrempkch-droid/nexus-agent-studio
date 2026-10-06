@@ -23,13 +23,14 @@
 mod bridge;
 mod mcp;
 
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use bridge::{spawn_core, wait_for_boot, CoreConfig};
 use mcp::{CoreSession, SessionError};
 use serde_json::Value;
+use tauri::Emitter;
 
 /// How long the shell waits for the core to announce itself.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -62,14 +63,20 @@ struct ShellState {
     /// honest cost is that a slow tool blocks the others, which is why a request
     /// queue belongs on the to-do list rather than in this slice.
     core: Mutex<Option<CoreSession>>,
+    /// Outbound channel for server-to-client notifications (agent stream
+    /// deltas). Every core session is handed a clone, and a forwarder thread
+    /// drains the one receiver into Tauri events for the webview. The reader
+    /// threads do the sending, so streaming never contends with the request lock.
+    notification_tx: mpsc::Sender<Value>,
 }
 
 impl ShellState {
-    fn new(app_root: PathBuf, workspace_root: PathBuf) -> Self {
+    fn new(app_root: PathBuf, workspace_root: PathBuf, notification_tx: mpsc::Sender<Value>) -> Self {
         Self {
             app_root,
             workspace_root,
             core: Mutex::new(None),
+            notification_tx,
         }
     }
 
@@ -92,7 +99,7 @@ impl ShellState {
             // The protocol is stateless and the spec says the client SHOULD
             // restart a server that exited unexpectedly, so a dead core is
             // replaced rather than surfaced as an error.
-            *guard = Some(Self::start_core(&self.app_root, &self.workspace_root)?);
+            *guard = Some(self.start_core()?);
         }
 
         let session = guard
@@ -106,11 +113,14 @@ impl ShellState {
     ///
     /// The core binary is located through `app_root`, but the process runs with
     /// `workspace_root` as its working directory — that is how the core decides
-    /// which project to serve.
-    fn start_core(app_root: &Path, workspace_root: &Path) -> Result<CoreSession, String> {
-        let config = CoreConfig::for_app_root(app_root);
-        let child = spawn_core(&config, workspace_root).map_err(|error| error.to_string())?;
-        let mut session = CoreSession::start(child).map_err(|error| error.to_string())?;
+    /// which project to serve. Every session is wired to the notification
+    /// channel, so its reader thread streams deltas back while a call is in
+    /// flight.
+    fn start_core(&self) -> Result<CoreSession, String> {
+        let config = CoreConfig::for_app_root(&self.app_root);
+        let child = spawn_core(&config, &self.workspace_root).map_err(|error| error.to_string())?;
+        let mut session = CoreSession::start_with_notifications(child, Some(self.notification_tx.clone()))
+            .map_err(|error| error.to_string())?;
 
         if let Err(error) = session.initialize(HANDSHAKE_TIMEOUT) {
             // Never leak a core that failed to handshake.
@@ -203,8 +213,14 @@ fn main() {
     let app_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let workspace_root = workspace_root_from_environment().unwrap_or_else(|| app_root.clone());
 
+    // One channel for the whole app: core reader threads push notifications here,
+    // and the forwarder below drains the single receiver into Tauri events. The
+    // receiver lives for the process lifetime, so a restarted core simply reuses
+    // the same sink.
+    let (notification_tx, notification_rx) = mpsc::channel::<Value>();
+
     tauri::Builder::default()
-        .manage(ShellState::new(app_root, workspace_root))
+        .manage(ShellState::new(app_root, workspace_root, notification_tx))
         .invoke_handler(tauri::generate_handler![
             shell_info,
             workspace_info,
@@ -212,6 +228,25 @@ fn main() {
             core_handshake,
             call_core_tool
         ])
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                for notification in notification_rx {
+                    // Only the agent stream is webview-facing today; a future
+                    // spec notification would be ignored rather than misrouted.
+                    if notification.get("method").and_then(Value::as_str)
+                        == Some("notifications/agent/stream")
+                    {
+                        let payload = notification
+                            .get("params")
+                            .cloned()
+                            .unwrap_or_else(|| Value::Null);
+                        let _ = handle.emit("agent-stream", &payload);
+                    }
+                }
+            });
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("failed to run the NexusAgent Studio shell");
 }

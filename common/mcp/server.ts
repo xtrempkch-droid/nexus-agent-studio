@@ -18,10 +18,10 @@
  * @module common/mcp/server
  */
 
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type ServerContext } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import type * as z from 'zod/v4';
-import type { ToolDefinition, ToolHandler, ToolResult } from './types.ts';
+import type { ToolContext, ToolDefinition, ToolHandler, ToolResult } from './types.ts';
 
 /** Options for {@link InternalMCPServer}. */
 export interface InternalMCPServerOptions {
@@ -40,7 +40,7 @@ export interface InternalMCPServerOptions {
 interface RegisteredTool {
   readonly definition: ToolDefinition;
   /** Type-erased handler; the SDK validated the arguments before invocation. */
-  readonly handler: (args: unknown) => Promise<ToolResult>;
+  readonly handler: (args: unknown, ctx?: ToolContext) => Promise<ToolResult>;
   /** Owning plugin id, or `undefined` for built-in tools. */
   readonly pluginId?: string;
 }
@@ -166,7 +166,18 @@ export class InternalMCPServer {
         // The SDK validates `arguments` against `inputSchema` before calling the
         // handler, so re-typing the erased handler here is sound. The cast is
         // required because the registry is type-erased.
-        (async (args: unknown) => tool.handler(args)) as never,
+        //
+        // The SDK also hands the handler a second `ctx` argument whose `notify`
+        // sends a notification on the same channel as the request. It is adapted
+        // to our dependency-light `ToolContext` so handlers never have to know
+        // the SDK's shape — and it is omitted entirely when absent.
+        (async (args: unknown, ctx: ServerContext) =>
+          tool.handler(
+            args,
+            // Errors from a notification must never fail the turn that triggered
+            // it: streaming is best-effort, so rejections are swallowed here.
+            { notify: (notification) => ctx.mcpReq.notify(notification).catch(() => {}) },
+          )) as never,
       );
     }
 
@@ -191,11 +202,11 @@ export class InternalMCPServer {
       throw new Error(`Tool "${definition.name}" is already registered.`);
     }
 
-    const erased = handler as unknown as (args: unknown) => Promise<ToolResult>;
+    const erased = handler as unknown as (args: unknown, ctx?: ToolContext) => Promise<ToolResult>;
 
     this.tools.set(definition.name, {
       definition,
-      handler: async (args) => erased(args),
+      handler: async (args, ctx) => erased(args, ctx),
       ...(pluginId === undefined ? {} : { pluginId }),
     });
 

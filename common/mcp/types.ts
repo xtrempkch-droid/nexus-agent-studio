@@ -44,13 +44,41 @@ export interface ToolResult {
 }
 
 /**
+ * A notification a tool handler may send back to the client while it is still
+ * running. `method` is a custom extension method (e.g. `notifications/agent/stream`);
+ * `params` is whatever the extension defines. The SDK's own spec notifications
+ * are left to the SDK — this type exists so a handler can stream out-of-band
+ * progress without knowing the transport.
+ */
+export interface ToolNotification {
+  readonly method: string;
+  readonly params?: Record<string, unknown>;
+}
+
+/**
+ * Context handed to a tool handler alongside the validated arguments.
+ *
+ * It currently exposes exactly one capability — {@link ToolContext.notify},
+ * which forwards a notification on the channel the request arrived on. That is
+ * what lets a long-running tool (the agent) stream progress to the UI instead of
+ * answering all at once.
+ */
+export interface ToolContext {
+  readonly notify: (notification: ToolNotification) => void | Promise<void>;
+}
+
+/**
  * A tool handler. Arguments are validated by the SDK against the tool's
  * `inputSchema` before this runs, so the inferred type is trustworthy.
+ *
+ * The optional {@link ToolContext} is the escape hatch for handlers that need to
+ * speak to the client mid-call; handlers that only answer can ignore it.
  *
  * @typeParam TSchema - The Zod schema of the owning {@link ToolDefinition}.
  */
 export type ToolHandler<TSchema extends z.ZodType = z.ZodType> = (
   args: z.infer<TSchema>,
+  ctx?: ToolContext,
 ) => Promise<ToolResult> | ToolResult;
 
 /**
@@ -63,7 +91,7 @@ export type ToolHandler<TSchema extends z.ZodType = z.ZodType> = (
  * storage layer erases the argument type.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type AnyToolHandler = (args: any) => Promise<ToolResult> | ToolResult;
+export type AnyToolHandler = (args: any, ctx?: ToolContext) => Promise<ToolResult> | ToolResult;
 
 /**
  * A tool definition paired with its handler, as produced by the tool factories.

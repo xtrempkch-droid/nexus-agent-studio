@@ -212,14 +212,32 @@ node dist/core.mjs      # core como MCP server stdio
    com o `AnyToolHandler` exportado pelo SDK v2 (semânticas diferentes; não gera erro
    porque são namespaces distintos). Renomear o local para `ErasedToolHandler` reduz a
    ambiguidade para quem ler o código depois.
+10. ✅ **Streaming da resposta do agente.** A resposta não chega mais de uma vez:
+    o core agora faz `stream: true` (`llmClient.completeStream`, Ollama NDJSON /
+    OpenAI SSE) e emite eventos de progresso (`answer_delta` + `tool_call`) pelo
+    handler `onProgress` do loop. Esses eventos saem como notificações
+    `notifications/agent/stream` — o `ctx.mcpReq.notify` do SDK v2, exposto aos
+    handlers como um `ToolContext.notify` dependency-light em `server.ts` — e o
+    sidecar Rust encaminha as mensagens **sem `id`** do stdout para a webview via
+    um evento Tauri `agent-stream` (o leitor roteia notificações para um canal
+    separado, então streaming nunca compete com a resposta pendente). A UI mostra
+    um balão "thinking" que cresce com cada `answer_delta` e loga as tools no
+    terminal conforme são chamadas. O `answer_delta.text` é o **preview completo**
+    do `answer` extraído do JSON ainda incompleto (`answerPreview` em `agentLoop.ts`);
+    o valor final continua vindo do parse completo. `complete` (não-streaming) foi
+    preservado e testado como alternativa. **Verificado:** unit tests (137) +
+    smoke; o round-trip da notificação foi provado por um probe stdio ad hoc; os
+    módulos Rust (`mcp.rs`/`bridge.rs`, livres de Tauri) compilam e testam em
+    isolamento (`cargo check`/`cargo test`); o `cargo check` completo do `main.rs`
+    fica para o CI (exige as libs de sistema do Tauri).
 
 ---
 
-**Ao retomar.** Nada que foi pedido está pendente — o que resta é **melhoria**, em
-ordem de valor: (1) streaming da resposta do agente (hoje chega de uma vez, e um
-1.5B na CPU demora — ver o texto crescer valeria muito); (2) modelo maior no Ollama
-para qualidade/velocidade — escolha do dono, não conserto; (3) suportar `.gitignore`
-no `list_directory` (hoje é uma lista fixa); (4) era moderna da spec (§5-d). Para
+**Ao retomar.** O streaming da resposta do agente foi implementado (§5 item 10) —
+o que resta é **melhoria**, em ordem de valor: (1) modelo maior no Ollama para
+qualidade/velocidade — escolha do dono, não conserto; (2) suportar `.gitignore` no
+`list_directory` (hoje é uma lista fixa); (3) era moderna da spec (§5 item 6-d);
+(4) fila de requisições no sidecar em vez do mutex bloqueante (§5 item 6-a). Para
 retomar comigo, ler §3 linhas 16–23 (histórico recente) e
 `/memories/repo/build-and-verify.md` (armadilhas já pagas).
 
