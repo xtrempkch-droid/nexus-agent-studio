@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import type { AgentProgressEvent, InlineHint } from './lib/coreTypes.ts';
+import type { AgentProgressEvent, CursorPosition, InlineHint, TextSelection } from './lib/coreTypes.ts';
 import {
   describeCore,
   isShellAvailable,
@@ -43,9 +43,11 @@ import {
   listModels,
   readFile,
   runInSandbox,
+  setEditorContext,
   writeFile,
   type AgentTurnResult,
   type DirectoryEntry,
+  type EditorContextReport,
   type LanguageServerStatus,
 } from './lib/coreClient.ts';
 import { AgentChat, type ChatMessage, type PendingApproval } from './components/AgentChat.tsx';
@@ -171,6 +173,28 @@ const PREVIEW_FILES: readonly FileRecord[] = [
 function uid(): string {
   return globalThis.crypto.randomUUID();
 }
+
+/**
+ * How long the editor waits after the caret moves before telling the core.
+ *
+ * Debounced because the caret moves on every keystroke while the value the agent
+ * reads only needs to be the latest one; a round trip per character would put
+ * real work behind every key on a slow core.
+ */
+const CONTEXT_DEBOUNCE_MS = 400;
+
+/** Convert a UTF-16 offset in `text` to a 1-based line/column, as the core expects. */
+function offsetToPosition(text: string, offset: number): CursorPosition {
+  const clamped = Math.max(0, Math.min(offset, text.length));
+  const before = text.slice(0, clamped);
+  return {
+    line: before.split('\n').length,
+    column: clamped - before.lastIndexOf('\n'),
+  };
+}
+
+/** The parts of the editor context that come from React state rather than the DOM. */
+type EditorBaseContext = Pick<EditorContextReport, 'activeFile' | 'openFiles' | 'dirty'>;
 
 let lineSeq = 0;
 function line(stream: TerminalLine['stream'], text: string): TerminalLine {
@@ -330,6 +354,94 @@ export default function App() {
       previous.map((file) => (file.path === path ? { ...file, content, status } : file)),
     );
   }, []);
+
+  /** Whether the open buffer has changes the core has not been given yet. */
+  const dirty = useMemo(
+    () => files.some((file) => file.path === activeFile && file.status !== 'normal'),
+    [activeFile, files],
+  );
+
+  /**
+   * What the editor is showing, restricted to React-owned state.
+   *
+   * The caret is deliberately absent: it changes on every keystroke, and folding
+   * it in here would re-render and re-send on every character. It lives in a ref
+   * and is read when the report is actually flushed.
+   */
+  const baseContext = useMemo<EditorBaseContext>(
+    () => ({
+      activeFile: activeFile === '' ? null : activeFile,
+      openFiles: openTabs,
+      dirty,
+    }),
+    [activeFile, dirty, openTabs],
+  );
+
+  /** Caret and selection, updated by the textarea without provoking a render. */
+  const caretRef = useRef<{ cursor: CursorPosition; selection: TextSelection | null }>({
+    cursor: { line: 1, column: 1 },
+    selection: null,
+  });
+  const contextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const baseContextRef = useRef(baseContext);
+
+  /**
+   * Report the editor state to the core, debounced.
+   *
+   * This is the write half of `get_editor_context`; without it the agent sees an
+   * empty context and has to ask which file and lines the user means. Failure is
+   * silent on purpose — in the browser there is no core to talk to, and a failed
+   * background sync is not worth a terminal line per cursor move.
+   */
+  const pushEditorContext = useCallback((context: EditorBaseContext) => {
+    if (!isShellAvailable()) {
+      return;
+    }
+    if (contextTimer.current !== null) {
+      clearTimeout(contextTimer.current);
+    }
+    contextTimer.current = setTimeout(() => {
+      contextTimer.current = null;
+      const { cursor, selection } = caretRef.current;
+      void setEditorContext({ ...context, cursor, selection }).catch(() => undefined);
+    }, CONTEXT_DEBOUNCE_MS);
+  }, []);
+
+  /** Record where the caret is, then let the debounced report carry it. */
+  const captureCaret = useCallback(
+    (element: HTMLTextAreaElement) => {
+      const start = offsetToPosition(element.value, element.selectionStart);
+      const end = offsetToPosition(element.value, element.selectionEnd);
+      const collapsed = start.line === end.line && start.column === end.column;
+      caretRef.current = { cursor: end, selection: collapsed ? null : { start, end } };
+      pushEditorContext(baseContext);
+    },
+    [baseContext, pushEditorContext],
+  );
+
+  // Report whenever the React-owned half changes: opening or closing a file,
+  // switching tabs, or the buffer becoming dirty both move what the user is
+  // looking at.
+  useEffect(() => {
+    baseContextRef.current = baseContext;
+    pushEditorContext(baseContext);
+  }, [baseContext, pushEditorContext]);
+
+  // The caret of the previous file says nothing about this one, so opening a new
+  // file resets it rather than reporting a position that no longer exists.
+  useEffect(() => {
+    caretRef.current = { cursor: { line: 1, column: 1 }, selection: null };
+  }, [activeFile]);
+
+  // A scheduled report must not fire after the window is gone.
+  useEffect(
+    () => () => {
+      if (contextTimer.current !== null) {
+        clearTimeout(contextTimer.current);
+      }
+    },
+    [],
+  );
 
   /** Replace the stored diagnostics for one file, keeping the other files'. */
   const mergeHints = useCallback((filePath: string, incoming: readonly InlineHint[]) => {
@@ -648,6 +760,10 @@ export default function App() {
       setConnectionDotClass('bg-emerald-400');
       appendTerminal(line('system', `Core: ${description}`));
 
+      // The first report may have been sent before the core was up, so repeat it
+      // now that there is something to receive it.
+      pushEditorContext(baseContextRef.current);
+
       const workspace = await workspaceInfo();
       if (cancelled) {
         return;
@@ -671,7 +787,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appendTerminal, loadDirectory, loadLanguageServers]);
+  }, [appendTerminal, loadDirectory, loadLanguageServers, pushEditorContext]);
 
   // Subscribe to the core's agent progress stream once, when the shell is
   // available. `answer_delta` fills the streaming bubble; `tool_call` surfaces
@@ -1031,7 +1147,13 @@ export default function App() {
           <div className="relative min-h-0 flex-1 bg-slate-950/80">
             <textarea
               value={currentFile?.content ?? ''}
-              onChange={(event) => updateFile(activeFile, event.target.value, 'modified')}
+              onChange={(event) => {
+                updateFile(activeFile, event.target.value, 'modified');
+                captureCaret(event.target);
+              }}
+              onSelect={(event) => captureCaret(event.currentTarget)}
+              onClick={(event) => captureCaret(event.currentTarget)}
+              onKeyUp={(event) => captureCaret(event.currentTarget)}
               onKeyDown={(event) => {
                 if ((event.ctrlKey || event.metaKey) && event.key === 's') {
                   event.preventDefault();
