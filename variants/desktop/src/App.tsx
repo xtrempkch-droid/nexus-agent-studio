@@ -996,21 +996,36 @@ export default function App() {
         />
 
         <main className="flex min-w-0 flex-1 flex-col border-r border-slate-800/80 bg-ide-editor">
-          <div className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-800/80 bg-ide-sidebar px-2 font-mono text-xs">
-            {openTabs.map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setActiveFile(tab)}
-                className={`flex items-center gap-2 rounded-t border-r border-slate-800/60 px-3 py-1.5 ${
-                  tab === activeFile
-                    ? 'border-t-2 border-indigo-500 bg-ide-editor text-slate-100'
-                    : 'bg-slate-900/40 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <span>{tab}</span>
-              </button>
-            ))}
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-slate-800/80 bg-ide-sidebar px-2 font-mono text-xs">
+            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+              {openTabs.map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveFile(tab)}
+                  className={`flex items-center gap-2 rounded-t border-r border-slate-800/60 px-3 py-1.5 ${
+                    tab === activeFile
+                      ? 'border-t-2 border-indigo-500 bg-ide-editor text-slate-100'
+                      : 'bg-slate-900/40 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <span>{tab}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Always-visible save: the keyboard shortcut exists too, but a
+                discoverable button is what makes saving findable. */}
+            <button
+              type="button"
+              onClick={saveActiveFile}
+              disabled={activeFile === ''}
+              title="Salvar arquivo (Ctrl+S)"
+              className="flex shrink-0 items-center gap-1.5 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Icon name="save" className="h-3.5 w-3.5" />
+              <span>Salvar</span>
+            </button>
           </div>
 
           <div className="relative min-h-0 flex-1 bg-slate-950/80">
