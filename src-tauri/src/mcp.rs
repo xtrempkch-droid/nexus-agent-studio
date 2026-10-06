@@ -480,6 +480,7 @@ mod tests {
             vec![
                 "get_editor_context",
                 "list_directory",
+                "list_models",
                 "read_file",
                 "run_terminal_command",
                 "write_file",
