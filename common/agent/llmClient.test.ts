@@ -11,15 +11,23 @@
 import { describe, expect, it } from 'vitest';
 import {
   chatRequestBody,
+  chatStreamRequestBody,
   chatUrl,
   complete,
+  completeStream,
   type LlmFetcher,
+  type LlmStreamFetcher,
 } from './llmClient.ts';
 
 const MESSAGES = [{ role: 'user' as const, content: 'olá' }];
 
 function fetcherWith(payload: unknown, ok = true, status = 200): LlmFetcher {
   return async () => ({ ok, status, json: async () => payload });
+}
+
+/** A streaming fetcher yielding the given chunks, in order. */
+function streamFetcher(chunks: string[], ok = true, status = 200): LlmStreamFetcher {
+  return async () => ({ ok, status, chunks: (async function* () { for (const c of chunks) yield c; })() });
 }
 
 describe('chatUrl', () => {
@@ -93,5 +101,81 @@ describe('complete', () => {
     await expect(
       complete('ollama', 'http://x', 'm', MESSAGES, fetcherWith({ message: { content: '' } })),
     ).rejects.toThrow('sem conteúdo');
+  });
+});
+
+describe('chatStreamRequestBody', () => {
+  it('turns streaming on while keeping the JSON format on the Ollama path', () => {
+    const body = chatStreamRequestBody('ollama', 'm', MESSAGES) as {
+      stream: boolean;
+      format: string;
+    };
+    expect(body.stream).toBe(true);
+    expect(body.format).toBe('json');
+  });
+
+  it('turns streaming on for the OpenAI-compatible path', () => {
+    const body = chatStreamRequestBody('openai', 'm', MESSAGES) as { stream: boolean };
+    expect(body.stream).toBe(true);
+  });
+});
+
+describe('completeStream', () => {
+  it('streams Ollama NDJSON fragments and resolves the full text', async () => {
+    const deltas: string[] = [];
+    const full = await completeStream(
+      'ollama',
+      'http://x',
+      'm',
+      MESSAGES,
+      (delta) => deltas.push(delta),
+      streamFetcher([
+        '{"message":{"role":"assistant","content":"{\\"ans"}}\n',
+        '{"message":{"role":"assistant","content":"wer\\":\\"ok\\"}"}}\n',
+      ]),
+    );
+
+    expect(full).toBe('{"ans' + 'wer":"ok"}');
+    expect(deltas).toEqual(['{"ans', 'wer":"ok"}']);
+  });
+
+  it('streams OpenAI-compatible SSE deltas and resolves the full text', async () => {
+    const deltas: string[] = [];
+    const full = await completeStream(
+      'openai',
+      'http://x',
+      'm',
+      MESSAGES,
+      (delta) => deltas.push(delta),
+      streamFetcher([
+        'data: {"choices":[{"delta":{"content":"ol"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"á"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    );
+
+    expect(full).toBe('olá');
+    expect(deltas).toEqual(['ol', 'á']);
+  });
+
+  it('handles a delta split across chunk boundaries', async () => {
+    const deltas: string[] = [];
+    const full = await completeStream(
+      'ollama',
+      'http://x',
+      'm',
+      MESSAGES,
+      (delta) => deltas.push(delta),
+      streamFetcher(['{"message":{"content":"ab', 'c"}}\n']),
+    );
+
+    expect(full).toBe('abc');
+    expect(deltas).toEqual(['abc']);
+  });
+
+  it('throws when the server refuses', async () => {
+    await expect(
+      completeStream('ollama', 'http://x', 'm', MESSAGES, () => {}, streamFetcher([], false, 500)),
+    ).rejects.toThrow('HTTP 500');
   });
 });

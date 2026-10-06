@@ -13,13 +13,22 @@
  */
 
 import * as z from 'zod/v4';
-import { runAgentTurn, type AgentTool } from '../../agent/agentLoop.ts';
-import { errorResult, jsonResult, type AnyToolHandler, type ToolRegistration } from '../types.ts';
+import { runAgentTurn, type AgentProgressEvent, type AgentTool } from '../../agent/agentLoop.ts';
+import type { LlmStreamFetcher } from '../../agent/llmClient.ts';
+import {
+  errorResult,
+  jsonResult,
+  type AnyToolHandler,
+  type ToolContext,
+  type ToolRegistration,
+} from '../types.ts';
 
 /** Dependencies for {@link createAgentTools}. */
 export interface AgentToolsOptions {
   /** The tools the agent may call — everything except the agent itself. */
   readonly tools: readonly ToolRegistration[];
+  /** Streaming fetcher override, used by tests to avoid the network. */
+  readonly streamFetcher?: LlmStreamFetcher;
 }
 
 /** Register the agent tool. */
@@ -54,7 +63,7 @@ export function createAgentTools(options: AgentToolsOptions): ToolRegistration[]
     },
   }));
 
-  const handler: AnyToolHandler = async (args) => {
+  const handler: AnyToolHandler = async (args, ctx?: ToolContext) => {
     const {
       prompt,
       model,
@@ -72,6 +81,20 @@ export function createAgentTools(options: AgentToolsOptions): ToolRegistration[]
       return errorResult('ask_agent precisa de "prompt" ou de "history" para continuar.');
     }
 
+    // Progress events ride out on a notification on the same channel as the
+    // request, so the UI can render the answer growing instead of waiting. When
+    // there is no context (a direct in-process call), the events are dropped and
+    // the turn still answers normally.
+    const onProgress =
+      ctx === undefined
+        ? undefined
+        : (event: AgentProgressEvent) => {
+            void ctx.notify({
+              method: 'notifications/agent/stream',
+              params: event as unknown as Record<string, unknown>,
+            });
+          };
+
     try {
       const turn = await runAgentTurn({
         prompt,
@@ -85,6 +108,8 @@ export function createAgentTools(options: AgentToolsOptions): ToolRegistration[]
         pendingArguments,
         decision,
         tools: agentTools,
+        ...(onProgress === undefined ? {} : { onProgress }),
+        ...(options.streamFetcher === undefined ? {} : { streamFetcher: options.streamFetcher }),
       });
       return jsonResult({
         status: turn.status,

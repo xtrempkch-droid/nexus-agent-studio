@@ -10,21 +10,28 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { runAgentTurn, type AgentTool } from './agentLoop.ts';
-import type { LlmFetcher } from './llmClient.ts';
+import { runAgentTurn, type AgentProgressEvent, type AgentTool } from './agentLoop.ts';
+import type { LlmStreamFetcher } from './llmClient.ts';
 
-/** A fetcher that plays back a scripted sequence of assistant responses. */
-function scriptedFetcher(...responses: string[]): LlmFetcher {
+/** A streaming fetcher that plays back a scripted sequence of assistant responses. */
+function scriptedFetcher(...responses: string[]): LlmStreamFetcher {
   let index = 0;
-  return async () => ({
-    ok: true,
-    status: 200,
-    json: async () => {
-      const content = responses[Math.min(index, responses.length - 1)] ?? '';
-      index += 1;
-      return { message: { role: 'assistant', content } };
-    },
-  });
+  return async () => {
+    const content = responses[Math.min(index, responses.length - 1)] ?? '';
+    index += 1;
+    return {
+      ok: true,
+      status: 200,
+      chunks: (async function* () {
+        yield ndjson(content);
+      })(),
+    };
+  };
+}
+
+/** Wrap one assistant fragment as a single Ollama NDJSON stream event. */
+function ndjson(content: string): string {
+  return `${JSON.stringify({ message: { role: 'assistant', content } })}\n`;
 }
 
 function tool(name: string, output: string, calls: string[]): AgentTool {
@@ -53,7 +60,7 @@ describe('runAgentTurn', () => {
     const turn = await runAgentTurn({
       ...BASE,
       tools,
-      fetcher: scriptedFetcher(
+      streamFetcher: scriptedFetcher(
         '{"tool":"read_file","arguments":{"path":"src/a.ts"}}',
         '{"answer":"pronto"}',
       ),
@@ -69,7 +76,7 @@ describe('runAgentTurn', () => {
     const turn = await runAgentTurn({
       ...BASE,
       tools: [tool('read_file', 'x', calls)],
-      fetcher: scriptedFetcher(
+      streamFetcher: scriptedFetcher(
         '{"tool":"destroy_everything","arguments":{}}',
         '{"answer":"desculpe"}',
       ),
@@ -85,7 +92,7 @@ describe('runAgentTurn', () => {
     const turn = await runAgentTurn({
       ...BASE,
       tools: [],
-      fetcher: scriptedFetcher('não sei o que fazer'),
+      streamFetcher: scriptedFetcher('não sei o que fazer'),
     });
 
     expect(turn.answer).toBe('não sei o que fazer');
@@ -96,7 +103,7 @@ describe('runAgentTurn', () => {
     const turn = await runAgentTurn({
       ...BASE,
       tools: [],
-      fetcher: scriptedFetcher('Certo, aqui vai: {"answer":"finalizado"} obrigado'),
+      streamFetcher: scriptedFetcher('Certo, aqui vai: {"answer":"finalizado"} obrigado'),
     });
 
     expect(turn.answer).toBe('finalizado');
@@ -107,7 +114,7 @@ describe('runAgentTurn', () => {
       ...BASE,
       tools: [],
       maxSteps: 3,
-      fetcher: scriptedFetcher('{"tool":"nope","arguments":{}}'),
+      streamFetcher: scriptedFetcher('{"tool":"nope","arguments":{}}'),
     });
 
     expect(turn.steps).toHaveLength(3);
@@ -128,7 +135,7 @@ describe('runAgentTurn', () => {
     const turn = await runAgentTurn({
       ...BASE,
       tools: [broken],
-      fetcher: scriptedFetcher('{"tool":"read_file","arguments":{"path":"x"}}', '{"answer":"ok"}'),
+      streamFetcher: scriptedFetcher('{"tool":"read_file","arguments":{"path":"x"}}', '{"answer":"ok"}'),
     });
 
     expect(calls).toContain('read_file(threw)');
@@ -142,7 +149,7 @@ describe('runAgentTurn', () => {
       ...BASE,
       mode: 'assisted',
       tools: [tool('write_file', 'escrito', calls)],
-      fetcher: scriptedFetcher('{"tool":"write_file","arguments":{"path":"a.ts","content":"x"}}'),
+      streamFetcher: scriptedFetcher('{"tool":"write_file","arguments":{"path":"a.ts","content":"x"}}'),
     });
 
     expect(turn.status).toBe('needs_approval');
@@ -159,7 +166,7 @@ describe('runAgentTurn', () => {
       ...BASE,
       mode: 'assisted',
       tools: [tool('read_file', 'conteúdo', calls)],
-      fetcher: scriptedFetcher('{"tool":"read_file","arguments":{}}', '{"answer":"ok"}'),
+      streamFetcher: scriptedFetcher('{"tool":"read_file","arguments":{}}', '{"answer":"ok"}'),
     });
 
     expect(turn.status).toBe('done');
@@ -172,7 +179,7 @@ describe('runAgentTurn', () => {
       ...BASE,
       mode: 'assisted',
       tools: [tool('write_file', 'escrito', calls)],
-      fetcher: scriptedFetcher('{"tool":"write_file","arguments":{"path":"a.ts"}}'),
+      streamFetcher: scriptedFetcher('{"tool":"write_file","arguments":{"path":"a.ts"}}'),
     });
 
     const resumed = await runAgentTurn({
@@ -184,7 +191,7 @@ describe('runAgentTurn', () => {
       pendingTool: paused.tool,
       pendingArguments: paused.arguments,
       decision: 'approve',
-      fetcher: scriptedFetcher('{"answer":"feito"}'),
+      streamFetcher: scriptedFetcher('{"answer":"feito"}'),
     });
 
     expect(resumed.status).toBe('done');
@@ -198,7 +205,7 @@ describe('runAgentTurn', () => {
       ...BASE,
       mode: 'assisted',
       tools: [tool('write_file', 'escrito', calls)],
-      fetcher: scriptedFetcher('{"tool":"write_file","arguments":{}}'),
+      streamFetcher: scriptedFetcher('{"tool":"write_file","arguments":{}}'),
     });
 
     const resumed = await runAgentTurn({
@@ -210,7 +217,7 @@ describe('runAgentTurn', () => {
       pendingTool: paused.tool,
       pendingArguments: paused.arguments,
       decision: 'reject',
-      fetcher: scriptedFetcher('{"answer":"entendido"}'),
+      streamFetcher: scriptedFetcher('{"answer":"entendido"}'),
     });
 
     expect(resumed.answer).toBe('entendido');
@@ -224,11 +231,56 @@ describe('runAgentTurn', () => {
       ...BASE,
       mode: 'autonomous',
       tools: [tool('write_file', 'escrito', calls)],
-      fetcher: scriptedFetcher('{"tool":"write_file","arguments":{}}', '{"answer":"feito"}'),
+      streamFetcher: scriptedFetcher('{"tool":"write_file","arguments":{}}', '{"answer":"feito"}'),
     });
 
     expect(turn.status).toBe('done');
     expect(turn.answer).toBe('feito');
     expect(calls).toEqual(['write_file({})']);
+  });
+
+  it('streams answer deltas as the answer grows', async () => {
+    const events: AgentProgressEvent[] = [];
+    const fetcher: LlmStreamFetcher = async () => ({
+      ok: true,
+      status: 200,
+      chunks: (async function* () {
+        yield ndjson('{"answer":"ol');
+        yield ndjson('á');
+        yield ndjson(' mundo"}');
+      })(),
+    });
+
+    const turn = await runAgentTurn({
+      ...BASE,
+      tools: [],
+      onProgress: (event) => events.push(event),
+      streamFetcher: fetcher,
+    });
+
+    expect(turn.answer).toBe('olá mundo');
+    expect(
+      events.filter((event) => event.type === 'answer_delta').map((event) => event.text),
+    ).toEqual(['ol', 'olá', 'olá mundo']);
+  });
+
+  it('emits tool_call progress events as tools run', async () => {
+    const calls: string[] = [];
+    const events: AgentProgressEvent[] = [];
+
+    const turn = await runAgentTurn({
+      ...BASE,
+      tools: [tool('read_file', 'conteúdo', calls)],
+      onProgress: (event) => events.push(event),
+      streamFetcher: scriptedFetcher(
+        '{"tool":"read_file","arguments":{"path":"a.ts"}}',
+        '{"answer":"ok"}',
+      ),
+    });
+
+    expect(turn.answer).toBe('ok');
+    expect(
+      events.filter((event) => event.type === 'tool_call').map((event) => event.tool),
+    ).toEqual(['read_file']);
   });
 });

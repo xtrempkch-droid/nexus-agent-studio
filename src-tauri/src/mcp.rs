@@ -32,7 +32,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -111,12 +111,27 @@ impl CoreSession {
     /// `stderr` is not part of the protocol, but leaving it unread would fill the
     /// pipe buffer and block the child mid-conversation; its lines are collected
     /// only so a failed handshake can show what the core said about itself.
-    pub fn start(mut child: Child) -> Result<Self, SessionError> {
+    ///
+    /// This convenience entry routes server-to-client notifications nowhere — it
+    /// is what the tests use. The shell uses
+    /// [`CoreSession::start_with_notifications`] so it can stream them onward.
+    pub fn start(child: Child) -> Result<Self, SessionError> {
+        Self::start_with_notifications(child, None)
+    }
+
+    /// Like [`CoreSession::start`], but forwards every server-to-client
+    /// notification (a message with no `id`) to `notification_sink` while it is
+    /// being read. Responses still go through the ordinary request/response
+    /// channel, so a streaming notification cannot desynchronise a pending call.
+    pub fn start_with_notifications(
+        mut child: Child,
+        notification_sink: Option<Sender<Value>>,
+    ) -> Result<Self, SessionError> {
         let stdin = child.stdin.take().ok_or(SessionError::MissingPipe("stdin"))?;
         let stdout = child.stdout.take().ok_or(SessionError::MissingPipe("stdout"))?;
         let stderr = child.stderr.take().ok_or(SessionError::MissingPipe("stderr"))?;
 
-        let responses = spawn_line_reader(stdout);
+        let responses = spawn_line_reader(stdout, notification_sink);
 
         let stderr_lines = Arc::new(Mutex::new(Vec::new()));
         let collected = Arc::clone(&stderr_lines);
@@ -357,19 +372,46 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> std::io::Result<bool> 
     }
 }
 
+/// A JSON-RPC message is a server-to-client **notification** when it has no `id`.
+///
+/// Responses (and requests) always carry an `id`; only notifications omit it.
+/// The check is on key presence, so an error response with `"id": null` is still
+/// recognised as a response rather than misrouted.
+fn is_notification(line: &str) -> bool {
+    match serde_json::from_str::<Value>(line) {
+        Ok(message) => message.get("id").is_none(),
+        Err(_) => false,
+    }
+}
+
 /// Drain a stream into a channel of lines, one per line.
-fn spawn_line_reader<R: Read + Send + 'static>(reader: R) -> Receiver<String> {
+///
+/// When a `notification_sink` is given, messages without an `id` are routed to it
+/// instead of the response channel, so the caller can forward them (for example
+/// to the webview) without ever competing with a pending request for the line.
+fn spawn_line_reader<R: Read + Send + 'static>(
+    reader: R,
+    notification_sink: Option<Sender<Value>>,
+) -> Receiver<String> {
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
         for line in BufReader::new(reader).lines() {
-            match line {
-                Ok(text) => {
-                    if sender.send(text).is_err() {
-                        break;
+            let Ok(text) = line else { break };
+
+            if let Some(sink) = &notification_sink {
+                if is_notification(&text) {
+                    if let Ok(message) = serde_json::from_str::<Value>(&text) {
+                        if sink.send(message).is_err() {
+                            break;
+                        }
                     }
+                    continue;
                 }
-                Err(_) => break,
+            }
+
+            if sender.send(text).is_err() {
+                break;
             }
         }
     });
@@ -393,6 +435,30 @@ mod tests {
         let message = json!({ "jsonrpc": "2.0", "id": 1, "method": "x", "params": { "text": "a\nb" } });
         let line = serde_json::to_string(&message).expect("serialising must succeed");
         assert!(!line.contains('\n'), "serialised message contained a newline: {line}");
+    }
+
+    #[test]
+    fn notifications_are_routed_away_from_responses() {
+        // A notification (no `id`) must reach the sink, while the response that
+        // follows on the same stream must still reach the response channel. This
+        // is what lets a stream of agent deltas coexist with a pending tool call.
+        let (sink_tx, sink_rx) = mpsc::channel::<Value>();
+        let stream = b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/agent/stream\",\"params\":{\"type\":\"answer_delta\"}}\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n";
+        let responses = spawn_line_reader(std::io::Cursor::new(stream.to_vec()), Some(sink_tx));
+
+        let notification = sink_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a notification should be routed to the sink");
+        assert_eq!(
+            notification.get("method").and_then(Value::as_str),
+            Some("notifications/agent/stream")
+        );
+
+        let response = responses
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a response should stay on the response channel");
+        let response: Value = serde_json::from_str(&response).expect("the response must parse");
+        assert_eq!(response.get("id").and_then(Value::as_u64), Some(1));
     }
 
     #[test]

@@ -24,8 +24,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import type { InlineHint } from './lib/coreTypes.ts';
-import { describeCore, isShellAvailable, workspaceInfo } from './lib/shell.ts';
+import type { AgentProgressEvent, InlineHint } from './lib/coreTypes.ts';
+import { describeCore, isShellAvailable, onAgentStream, workspaceInfo } from './lib/shell.ts';
 import {
   askAgent,
   listDirectory,
@@ -257,6 +257,56 @@ export default function App() {
     setMessages((previous) => [...previous, { ...message, id: uid() }]);
   }, []);
 
+  /**
+   * The message that is currently streaming the agent's answer, if any.
+   *
+   * Streaming progress arrives out-of-band over Tauri events while
+   * `ask_agent` is still in flight, so the turn and the renderer are not in the
+   * same call stack. A ref (rather than state) holds the id so the event handler
+   * can update it without being recreated.
+   */
+  const streamingMessageId = useRef<string | null>(null);
+
+  /** Append a "thinking" agent bubble that the stream will fill in. */
+  const startStreamingMessage = useCallback(() => {
+    const id = uid();
+    streamingMessageId.current = id;
+    setMessages((previous) => [...previous, { id, role: 'agent', text: '', thinking: true }]);
+  }, []);
+
+  /** Replace the streaming bubble's text with the latest full answer preview. */
+  const applyStreamDelta = useCallback((text: string) => {
+    const id = streamingMessageId.current;
+    if (id === null) {
+      return;
+    }
+    setMessages((previous) =>
+      previous.map((message) =>
+        message.id === id ? { ...message, text, thinking: false } : message,
+      ),
+    );
+  }, []);
+
+  /** Finalise the streaming bubble with the complete answer. */
+  const finishStreamingMessage = useCallback((text: string) => {
+    const id = streamingMessageId.current;
+    streamingMessageId.current = null;
+    setMessages((previous) =>
+      previous.map((message) =>
+        message.id === id ? { ...message, text, thinking: false } : message,
+      ),
+    );
+  }, []);
+
+  /** Remove the streaming bubble without replacing it (e.g. before an approval card). */
+  const dropStreamingMessage = useCallback(() => {
+    const id = streamingMessageId.current;
+    streamingMessageId.current = null;
+    if (id !== null) {
+      setMessages((previous) => previous.filter((message) => message.id !== id));
+    }
+  }, []);
+
   const updateFile = useCallback((path: string, content: string, status: FileStatus) => {
     setFiles((previous) =>
       previous.map((file) => (file.path === path ? { ...file, content, status } : file)),
@@ -395,16 +445,44 @@ export default function App() {
     };
   }, [appendTerminal, loadDirectory]);
 
-  /** Log the tools a turn used, so the user sees what the agent did. */
-  const logToolCalls = useCallback(
-    (names: readonly string[]) => {
-      if (names.length > 0) {
-        appendTerminal(line('system', `agente chamou: ${names.join(', ')}`));
-      }
-    },
-    [appendTerminal],
-  );
+  // Subscribe to the core's agent progress stream once, when the shell is
+  // available. `answer_delta` fills the streaming bubble; `tool_call` surfaces
+  // the tool names in the terminal as they happen instead of after the turn.
+  useEffect(() => {
+    if (!isShellAvailable()) {
+      return undefined;
+    }
 
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    const handleProgress = (event: AgentProgressEvent) => {
+      if (event.type === 'answer_delta') {
+        applyStreamDelta(event.text);
+      } else if (event.type === 'tool_call') {
+        appendTerminal(line('system', `agente: ${event.tool}`));
+      }
+    };
+
+    onAgentStream(handleProgress)
+      .then((stop) => {
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      })
+      .catch(() => {
+        // No stream available; the turn still answers normally.
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [appendTerminal, applyStreamDelta]);
+
+  /** Log the tools a turn used, so the user sees what the agent did. */
   const finishTurn = useCallback(
     (turn: AgentTurnResult) => {
       setBusy(false);
@@ -415,17 +493,17 @@ export default function App() {
           ),
         );
       }
-      appendMessage({ role: 'agent', text: turn.answer });
+      finishStreamingMessage(turn.answer);
     },
-    [appendMessage],
+    [finishStreamingMessage],
   );
 
   const failTurn = useCallback(
     (error: unknown) => {
       setBusy(false);
-      appendMessage({ role: 'agent', text: `Falha ao executar o agente: ${String(error)}` });
+      finishStreamingMessage(`Falha ao executar o agente: ${String(error)}`);
     },
-    [appendMessage],
+    [finishStreamingMessage],
   );
 
   const resumeQueue = useRef(new Map<string, AgentResumeState>());
@@ -468,8 +546,6 @@ export default function App() {
                 decision: options.decision,
               });
 
-        logToolCalls(turn.toolCalls);
-
         if (turn.status === 'needs_approval') {
           const id = uid();
           resumeQueue.current.set(id, {
@@ -485,6 +561,9 @@ export default function App() {
             target: summary.target,
             description: summary.description,
           });
+          // The streaming bubble is replaced by the approval card, not by an
+          // answer — the resumed turn gets its own bubble.
+          dropStreamingMessage();
           appendMessage({
             role: 'agent',
             text: `Quero executar \`${turn.tool}\` — aprovar ou rejeitar?`,
@@ -498,16 +577,17 @@ export default function App() {
         failTurn(error);
       }
     },
-    [activeModel, activeProvider, approveAll, failTurn, finishTurn, logToolCalls, mode],
+    [activeModel, activeProvider, approveAll, dropStreamingMessage, failTurn, finishTurn, mode],
   );
 
   const handleSend = useCallback(
     (text: string) => {
       appendMessage({ role: 'user', text });
+      startStreamingMessage();
       setBusy(true);
       void runAgent({ prompt: text });
     },
-    [appendMessage, runAgent],
+    [appendMessage, runAgent, startStreamingMessage],
   );
 
   const handleApprove = useCallback(
@@ -519,10 +599,11 @@ export default function App() {
         return;
       }
       appendMessage({ role: 'system', text: 'Aprovado.' });
+      startStreamingMessage();
       setBusy(true);
       void runAgent({ resume, decision: 'approve' });
     },
-    [appendMessage, runAgent],
+    [appendMessage, runAgent, startStreamingMessage],
   );
 
   const handleReject = useCallback(
@@ -534,10 +615,11 @@ export default function App() {
         return;
       }
       appendMessage({ role: 'system', text: 'Rejeitado.' });
+      startStreamingMessage();
       setBusy(true);
       void runAgent({ resume, decision: 'reject' });
     },
-    [appendMessage, runAgent],
+    [appendMessage, runAgent, startStreamingMessage],
   );
 
   const handleShellSubmit = useCallback(

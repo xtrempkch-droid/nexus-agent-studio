@@ -18,10 +18,22 @@
  * @module variants/desktop/src/lib/shell
  */
 
+import type { AgentProgressEvent } from './coreTypes.ts';
+
+/** A Tauri event as delivered by the injected global API. */
+interface TauriEvent<T> {
+  readonly event: string;
+  readonly id?: number;
+  readonly payload: T;
+}
+
 /** The global Tauri injects when `app.withGlobalTauri` is enabled. */
 interface TauriGlobal {
   readonly core?: {
     invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  };
+  readonly event?: {
+    listen<T>(event: string, handler: (event: TauriEvent<T>) => void): Promise<() => void>;
   };
 }
 
@@ -76,4 +88,24 @@ export function workspaceInfo(): Promise<string> {
  */
 export function callCoreTool<T = unknown>(tool: string, args: object = {}): Promise<T> {
   return invokeShell<T>('call_core_tool', { tool, arguments: args });
+}
+
+/**
+ * Subscribe to agent progress events streamed from the core.
+ *
+ * The core emits `notifications/agent/stream` while `ask_agent` runs; the shell
+ * forwards each as an `agent-stream` Tauri event whose payload is an
+ * {@link AgentProgressEvent}. The returned promise resolves to an unsubscribe
+ * function. Outside the shell it rejects, which callers treat as "no stream".
+ */
+export function onAgentStream(
+  handler: (event: AgentProgressEvent) => void,
+): Promise<() => void> {
+  const eventApi = window.__TAURI__?.event;
+  if (eventApi === undefined) {
+    return Promise.reject(
+      new Error('the desktop shell event API is not available in this context'),
+    );
+  }
+  return eventApi.listen<AgentProgressEvent>('agent-stream', (event) => handler(event.payload));
 }
