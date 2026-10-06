@@ -37,10 +37,15 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 
 **Resumo: o pipeline está VERDE — 8 jobs** (6 de `build` × SO/Node, `cargo check`
 e o bundle `desktop-binary`). Nada mais é simulado: a UI, o agente e a aprovação
-passo a passo falam com o core de verdade. A máquina local não tem `node`/`npm` e
-não há `sudo` sem senha, então **o GitHub Actions é o ambiente de build** (§4); a
-janela só é aberta pelo dono na própria máquina. O modelo local é
-`deepseek-r1:1.5b` via Ollama (lento, sem GPU — ver §5).
+passo a passo falam com o core de verdade. **Ambiente local mudou desde a última
+nota:** agora a máquina **tem `node` 22 + `npm` 9** (build, teste, smoke e
+`build:desktop` rodam localmente) e **Rust via `rustup`** (1.99.0, instalação
+user-space) — então `cargo check`/`cargo test` dos módulos livres de Tauri também
+rodam aqui. O que **ainda** falta: `sudo` sem senha e o grupo `docker` (o socket é
+`root:root`), então o `cargo check` **completo** do `main.rs` (que exige as libs
+GTK/WebKitGTK de sistema) continua dependendo do CI (`tauri.yml`). A janela só é
+aberta pelo dono na própria máquina. O modelo local é `deepseek-r1:1.5b` via
+Ollama (lento, sem GPU), mas agora **livremente selecionável na UI** (ver §5).
 
 No run **37404728248** (commit `ab839aa`) os 6 jobs originais passaram com todos os
 passos verdes:
@@ -64,7 +69,7 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 
 | # | Bloqueio | Estado / resolução |
 | --- | --- | --- |
-| 1 | Sem Node/npm na máquina local | **Contornado.** O GitHub é o ambiente de build — os runners têm Node. Veja §4. |
+| 1 | Sem Node/npm na máquina local | ✅ **RESOLVIDO.** A máquina agora tem `node` 22 + `npm` 9 (e Rust via `rustup`), então lint/typecheck/test/build/smoke/build:desktop rodam localmente. Só o `cargo check` completo do `main.rs` (libs GTK de sistema) segue dependendo do CI. |
 | 2 | `package-lock.json` ausente → `npm ci` e `cache: npm` falhariam no CI | ✅ **RESOLVIDO.** O lockfile foi gerado pelo workflow `bootstrap-lockfile`, **validado contra o `package.json`** e commitado na raiz. O `build.yml` voltou para `npm ci` + `cache: npm`. O arquivo tem 239 entradas, `lockfileVersion: 3`, e `dependencies`/`devDependencies` batem **exatamente** com o manifesto. `typescript` resolveu em **6.0.3** — dentro da faixa `~6.0.2` e do peer `>=4.8.4 <6.1.0` do `typescript-eslint@8.71.1`. |
 | 3 | `git push` requer credenciais | ✅ **RESOLVIDO.** HTTPS não tinha credencial, mas a chave `~/.ssh/id_ed25519` já está autorizada na conta. O remote `origin` foi apontado para SSH: `git@github.com:xtrempkch-droid/nexus-agent-studio.git`. |
 | 4 | A UI desktop é uma **simulação** no browser | Falta a ponte IPC (Electron/Tauri) entre `variants/desktop` e `common/`. Ver §5. |
@@ -98,14 +103,15 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
    Acompanhe em: <https://github.com/xtrempkch-droid/nexus-agent-studio/actions>.
 3. ✅ **Lockfile no lugar.** O `package-lock.json` está commitado na raiz e o
    `build.yml` usa `npm ci` + `cache: npm`.
-4. Para **atualizar** o lockfile depois de mexer nas dependências (o ambiente local
-   não tem Node): **Actions → bootstrap-lockfile → Run workflow**. O download é um
+4. Para **atualizar** o lockfile depois de mexer nas dependências, agora dá para
+   rodar **localmente** `npm install --package-lock-only` (a máquina tem Node 22);
+   como alternativa, **Actions → bootstrap-lockfile → Run workflow**. O download é um
    `.zip` — extraia e coloque o `package-lock.json` na **raiz do repo** (a mesma pasta
    do `package.json`; **nunca** em `.github/`). Antes de commitar, confira que
    `dependencies`/`devDependencies` do lockfile batem com o `package.json`, senão você
    fixa um lockfile defasado.
 
-Verificação local (quando houver Node ≥ 22):
+Verificação local (Node ≥ 22 disponível nesta máquina):
 
 ```bash
 npm install
@@ -256,13 +262,18 @@ node dist/core.mjs      # core como MCP server stdio
 
 ---
 
-**Ao retomar.** O streaming da resposta do agente (§5 item 10), a **escolha de
-projeto/pasta** (§5 item 11) e a **escolha livre de modelo** (§5 item 12) foram
-implementados — o que resta é **melhoria**, em ordem de valor: (1) modelo maior no
-Ollama para qualidade/velocidade — escolha do dono, não conserto; (2) suportar
-`.gitignore` no `list_directory` (hoje é uma lista fixa); (3) era moderna da spec
-(§5 item 6-d); (4) fila de requisições no sidecar em vez do mutex bloqueante
-(§5 item 6-a). Para retomar comigo, ler §3 linhas 16–23 (histórico recente) e
+**Ao retomar.** Os três features da última fase foram **implementados e mergeados
+em `main`** (commit `ec45b65`): streaming do agente (§5 item 10), escolha de
+projeto/pasta (§5 item 11) e escolha livre de modelo (§5 item 12). O que resta é
+**melhoria**, em ordem de valor sugerida — conciliada com o `docs/roadmap.md`
+("Next"): (1) suportar `.gitignore` no `list_directory` (hoje é uma lista fixa,
+melhor custo/benefício e totalmente verificável no CI); (2) **LSP bridge** no
+`variants/desktop` (diagnósticos reais no editor via as mesmas tools MCP);
+(3) fila de requisições no sidecar em vez do mutex bloqueante (§5 item 6-a);
+(4) era moderna da spec 2026-07-28 (§5 item 6-d); (5) WASM target para `common/`
+(exige auditoria DOM-free). Itens de roadmap ainda não priorizados: plugin
+marketplace com assinatura, MCP remoto via Streamable HTTP, integração DAP. Para
+retomar comigo, ler §3 linhas 16–23 (histórico recente) e
 `/memories/repo/build-and-verify.md` (armadilhas já pagas).
 
 ## 6. Decisões e correções em relação ao prompt original
