@@ -99,6 +99,7 @@ pub struct CoreSession {
     responses: Receiver<String>,
     stderr_lines: Arc<Mutex<Vec<String>>>,
     last_id: u64,
+    server_name: Option<String>,
     negotiated_version: Option<String>,
 }
 
@@ -134,8 +135,14 @@ impl CoreSession {
             responses,
             stderr_lines,
             last_id: 0,
+            server_name: None,
             negotiated_version: None,
         })
+    }
+
+    /// The name the core reported as its `serverInfo.name`, once handshaken.
+    pub fn server_name(&self) -> Option<&str> {
+        self.server_name.as_deref()
     }
 
     /// The protocol revision the core chose during the handshake, if it got that far.
@@ -180,6 +187,11 @@ impl CoreSession {
             .get("protocolVersion")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        self.server_name = result
+            .get("serverInfo")
+            .and_then(|info| info.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
 
         self.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))?;
 
@@ -208,6 +220,39 @@ impl CoreSession {
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_owned))
             .collect())
+    }
+
+    /// Invoke one tool and hand back its raw `result`.
+    ///
+    /// The result is returned unshaped on purpose: a tool that fails still
+    /// resolves with `isError: true` **inside** the result, which is an ordinary
+    /// outcome for the caller to judge. Only protocol failures become `Err` here.
+    pub fn call_tool(
+        &mut self,
+        name: &str,
+        arguments: Value,
+        timeout: Duration,
+    ) -> Result<Value, SessionError> {
+        let id = self.allocate_id();
+        self.send(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments },
+        }))?;
+
+        let response = self.await_response(id, "tools/call", timeout)?;
+        unwrap_result(response)
+    }
+
+    /// Whether the core process is still alive.
+    ///
+    /// A long-lived session needs this to tell "reusable" from "died since the
+    /// last call". The spec says a client SHOULD restart a server that exited
+    /// unexpectedly, and that the protocol is stateless, so a dead session is
+    /// replaced rather than reported.
+    pub fn is_running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
     }
 
     /// Shut the core down the way the spec asks for.
@@ -439,12 +484,35 @@ mod tests {
             "tool list did not match the expected surface"
         );
 
-        // Emitted as a workflow command so the negotiated revision and the tool
-        // count become a check-run annotation. Without it, the only way to learn
-        // what the core actually agreed to would be the raw job log, which is
-        // not downloadable without authentication.
+        // Actually invoke a tool. Listing proves the schemas arrived; calling one
+        // proves the handler ran and the result came back over the wire.
+        let read = match session.call_tool(
+            "read_file",
+            json!({ "path": "package.json" }),
+            STEP_TIMEOUT,
+        ) {
+            Ok(result) => result,
+            Err(error) => panic!("tools/call read_file failed after negotiating {version}: {error}"),
+        };
+
+        assert!(
+            read.get("isError").and_then(Value::as_bool) != Some(true),
+            "read_file reported isError: {read}"
+        );
+
+        let rendered = serde_json::to_string(&read).expect("the result must serialise");
+        let head: String = rendered.chars().take(200).collect();
+        assert!(
+            rendered.contains("nexus-agent-studio"),
+            "read_file did not return the manifest; got: {head}"
+        );
+
+        // Emitted as a workflow command so the negotiated revision, the tool
+        // count and the tool call become a check-run annotation. Without it, the
+        // only way to learn what the core actually agreed to would be the raw job
+        // log, which is not downloadable without authentication.
         println!(
-            "::notice::mcp handshake ok: negotiated protocol {version}, {} tools",
+            "::notice::mcp handshake ok: negotiated protocol {version}, {} tools, tools/call ok",
             tools.len()
         );
 
