@@ -4,7 +4,7 @@
 > de parada sobrevivam ao fim de uma janela de contexto. Se você é uma IA ou um
 > humano retomando este repositório, **leia este arquivo primeiro**.
 >
-> **Última atualização:** 2026-10-05 · **Commit atual:** confira com
+> **Última atualização:** 2026-10-06 · **Commit atual:** confira com
 > `git log -1 --oneline`
 
 ---
@@ -29,15 +29,21 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 | --- | --- | --- | --- |
 | 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` |
 | 2 | Core TypeScript (`common/`) | ✅ completo | 🟡 parcial: o servidor MCP é exercitado ponta a ponta; temas e plugins só em teste unitário |
-| 3 | Sandbox Docker + IPC | 🟡 em andamento | ❌ o sandbox nunca foi invocado (não há Docker no CI); a **ponte IPC ainda não existe** — só o hospedeiro Tauri (`src-tauri/`) |
-| 4 | Arquitetura de plugins | ✅ completo | 🟡 parcial: registro/unload cobertos por teste, mas **nenhum plugin real foi carregado** |
-| 5 | Configuração e build | ✅ completo | 🟡 core sim, UI não: `dist/core.mjs` é construído e executado; `npm run build:desktop` **não roda no CI** |
+| 3 | Sandbox + shell | ✅ completo | ✅ `cargo check`/`cargo test` verdes; sem Docker no CI, mas há `LocalRunner` opt-in (`NEXUS_UNSANDBOXED=1`) |
+| 4 | Arquitetura de plugins | ✅ completo | 🟡 parcial: registro/unload cobertos por teste, mas nenhum plugin real foi carregado |
+| 5 | Configuração e build | ✅ completo | ✅ `build:desktop` roda no CI e o bundle portátil se verifica por handshake dentro de si |
+| 6 | UI desktop ligada ao core | ✅ completo | ✅ explorador, editor, terminal, configurações e agente falam com o core; janela só abre na máquina do dono (WebKitGTK) |
+| 7 | Agente + aprovação passo a passo | ✅ completo | 🟡 loop testado com `fetch` injetado; não rodado contra o modelo na janela (sem tela no CI) |
 
-**Resumo honesto: o pipeline está VERDE e agora prova que o servidor roda.** A
-máquina onde o código foi produzido **não tem `node` nem `npm`** e não há `sudo` sem
-senha, então nada roda localmente — o **GitHub Actions é o ambiente de build** (§4).
-No run **37404728248** (commit `ab839aa`) os **6 jobs** (ubuntu / windows / macos ×
-node 22 / 24) passaram com **todos os passos verdes**:
+**Resumo: o pipeline está VERDE — 8 jobs** (6 de `build` × SO/Node, `cargo check`
+e o bundle `desktop-binary`). Nada mais é simulado: a UI, o agente e a aprovação
+passo a passo falam com o core de verdade. A máquina local não tem `node`/`npm` e
+não há `sudo` sem senha, então **o GitHub Actions é o ambiente de build** (§4); a
+janela só é aberta pelo dono na própria máquina. O modelo local é
+`deepseek-r1:1.5b` via Ollama (lento, sem GPU — ver §5).
+
+No run **37404728248** (commit `ab839aa`) os 6 jobs originais passaram com todos os
+passos verdes:
 
 - ✅ `npm ci` — instala exatamente o que o lockfile fixa.
 - ✅ `npm run lint` — passa.
@@ -48,7 +54,7 @@ node 22 / 24) passaram com **todos os passos verdes**:
 
 **O que o smoke test realmente prova** (não é só "passou"): ele sobe o
 `dist/core.mjs` de produção e o dirige com um cliente MCP real via stdio. O handshake
-completa; `tools/list` devolve **exatamente** as 5 tools esperadas — o que só é
+completa; `tools/list` devolve **exatamente** as 7 tools esperadas — o que só é
 possível se o SDK converter cada schema Zod em JSON Schema **em runtime**, coisa que o
 typecheck não prova; `read_file` lê o `package.json`; uma chamada **sem o argumento
 obrigatório** é rejeitada com `isError: true` **antes** do handler rodar; um caminho
@@ -175,8 +181,8 @@ node dist/core.mjs      # core como MCP server stdio
      para o `initialize` em **qualquer** erro não reconhecido, nunca em um código
      específico.
 
-   - **(e) Ligar o chat a um modelo real — a próxima fatia, e a que fecha o
-     "software funcional".** `ollama` **já está instalado e rodando nesta máquina**,
+   - **(e) ✅ Ligar o chat a um modelo real.** `ollama` **já está instalado e
+     rodando nesta máquina**,
      com `deepseek-r1:1.5b` local (1,1 GB, roda na CPU). A API foi verificada na
      documentação oficial: `POST /api/chat` com `stream: false` devolve objeto
      único, e `format: "json"` **força** saída JSON válida. **Decisão de desenho:**
@@ -206,6 +212,16 @@ node dist/core.mjs      # core como MCP server stdio
    com o `AnyToolHandler` exportado pelo SDK v2 (semânticas diferentes; não gera erro
    porque são namespaces distintos). Renomear o local para `ErasedToolHandler` reduz a
    ambiguidade para quem ler o código depois.
+
+---
+
+**Ao retomar.** Nada que foi pedido está pendente — o que resta é **melhoria**, em
+ordem de valor: (1) streaming da resposta do agente (hoje chega de uma vez, e um
+1.5B na CPU demora — ver o texto crescer valeria muito); (2) modelo maior no Ollama
+para qualidade/velocidade — escolha do dono, não conserto; (3) suportar `.gitignore`
+no `list_directory` (hoje é uma lista fixa); (4) era moderna da spec (§5-d). Para
+retomar comigo, ler §3 linhas 16–23 (histórico recente) e
+`/memories/repo/build-and-verify.md` (armadilhas já pagas).
 
 ## 6. Decisões e correções em relação ao prompt original
 
