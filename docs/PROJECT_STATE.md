@@ -259,21 +259,34 @@ node dist/core.mjs      # core como MCP server stdio
     campo **"Modelo ativo (nome livre)"** com o mesmo estado, e o rodapé do chat
     mostra o nome digitado. Nada no core mudou — `ask_agent` já aceitava `model`
     como string livre; a restrição era só de UI.
+13. ✅ **`.gitignore` no `list_directory`.** A lista fixa de diretórios excluídos
+    (`DEFAULT_EXCLUDED_DIRECTORIES`) era a "resposta errada certa": não sabe que
+    um projeto guarda código em `target/`. Agora o walk **também** honra
+    `.gitignore` — novo `common/mcp/tools/gitignore.ts` com parser e matcher de um
+    **subconjunto documentado** da semântica do git (comentários, `*`/`?`/`**`/
+    `[...]`, `/` final = só diretórios, `/` inicial ou medial = ancorar ao
+    diretório do arquivo, `!` de negação, "última regra vence", escapes `\#`/`\!`/
+    `\ `). O `list_directory` carrega o `.gitignore` da raiz e, ao descer, empilha
+    os `.gitignore` aninhados (deeper vence), aplicando-os só às entradas **abaixo**
+    do diretório inicial — listar um diretório ignorado explicitamente continua
+    funcionando, igual à lista fixa. A lista fixa **permanece** como default
+    complementar (`.git` etc. nem sempre estão no `.gitignore`). **Verificado:**
+    `gitignore.test.ts` (11 casos) + 2 casos de integração em `fileTools.test.ts`;
+    150 testes no total, smoke verde.
 
 ---
 
-**Ao retomar.** Os três features da última fase foram **implementados e mergeados
-em `main`** (commit `ec45b65`): streaming do agente (§5 item 10), escolha de
-projeto/pasta (§5 item 11) e escolha livre de modelo (§5 item 12). O que resta é
-**melhoria**, em ordem de valor sugerida — conciliada com o `docs/roadmap.md`
-("Next"): (1) suportar `.gitignore` no `list_directory` (hoje é uma lista fixa,
-melhor custo/benefício e totalmente verificável no CI); (2) **LSP bridge** no
-`variants/desktop` (diagnósticos reais no editor via as mesmas tools MCP);
-(3) fila de requisições no sidecar em vez do mutex bloqueante (§5 item 6-a);
-(4) era moderna da spec 2026-07-28 (§5 item 6-d); (5) WASM target para `common/`
-(exige auditoria DOM-free). Itens de roadmap ainda não priorizados: plugin
-marketplace com assinatura, MCP remoto via Streamable HTTP, integração DAP. Para
-retomar comigo, ler §3 linhas 16–23 (histórico recente) e
+**Ao retomar.** Os três features da fase anterior foram **mergeados em `main`**
+(`ec45b65`): streaming (§5 item 10), projeto/pasta (§5 item 11) e modelo livre
+(§5 item 12). Nesta fase, **`.gitignore` no `list_directory`** (§5 item 13) foi
+implementado. O que resta é **melhoria**, em ordem de valor sugerida — conciliada
+com o `docs/roadmap.md` ("Next"): (1) **LSP bridge** no `variants/desktop`
+(diagnósticos reais no editor via as mesmas tools MCP); (2) fila de requisições no
+sidecar em vez do mutex bloqueante (§5 item 6-a); (3) era moderna da spec
+2026-07-28 (§5 item 6-d); (4) WASM target para `common/` (exige auditoria
+DOM-free). Itens de roadmap ainda não priorizados: plugin marketplace com
+assinatura, MCP remoto via Streamable HTTP, integração DAP. Para retomar comigo,
+ler §3 linhas 16–23 (histórico recente) e
 `/memories/repo/build-and-verify.md` (armadilhas já pagas).
 
 ## 6. Decisões e correções em relação ao prompt original

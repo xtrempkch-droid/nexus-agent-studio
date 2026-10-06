@@ -157,6 +157,36 @@ describe('list_directory', () => {
     expect(pathsOf(listing)).not.toContain('custom-noise');
     expect(pathsOf(listing)).toContain('.git');
   });
+
+  it('omits entries matched by a .gitignore in the workspace', async () => {
+    await writeFile(join(root, '.gitignore'), '*.log\nbuild/\n', 'utf8');
+    await writeFile(join(root, 'debug.log'), 'x', 'utf8');
+    await mkdir(join(root, 'build'), { recursive: true });
+    await writeFile(join(root, 'build', 'out.js'), 'x', 'utf8');
+    await writeFile(join(root, 'src.ts'), 'x', 'utf8');
+
+    const listing = payload<Listing>(await call('list_directory', { path: '.' }));
+
+    expect(pathsOf(listing)).toContain('src.ts');
+    expect(pathsOf(listing)).toContain('.gitignore');
+    expect(pathsOf(listing)).not.toContain('debug.log');
+    expect(pathsOf(listing).some((path) => path.startsWith('build'))).toBe(false);
+  });
+
+  it('lets a nested .gitignore narrow the rules for its subtree', async () => {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src', '.gitignore'), '*.log\n', 'utf8');
+    await writeFile(join(root, 'src', 'debug.log'), 'x', 'utf8');
+    await writeFile(join(root, 'src', 'main.ts'), 'x', 'utf8');
+    await writeFile(join(root, 'root.log'), 'x', 'utf8');
+
+    const listing = payload<Listing>(await call('list_directory', { path: '.' }));
+
+    expect(pathsOf(listing)).not.toContain('src/debug.log');
+    expect(pathsOf(listing)).toContain('src/main.ts');
+    // The nested rule does not leak upward to the root.
+    expect(pathsOf(listing)).toContain('root.log');
+  });
 });
 
 describe('write_file and read_file', () => {
