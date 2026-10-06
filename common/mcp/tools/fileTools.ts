@@ -16,6 +16,7 @@ import * as z from 'zod/v4';
 import { PathTraversalError, resolveWorkspacePath, toWorkspaceRelative } from '../../security/pathGuard.ts';
 import type { ExecutionLogger } from '../../debug/logger.ts';
 import { errorResult, jsonResult, type ToolRegistration } from '../types.ts';
+import { isPathIgnored, parseGitignore, type GitignoreSource } from './gitignore.ts';
 
 /** Dependencies for {@link createFileTools}. */
 export interface FileToolsOptions {
@@ -71,8 +72,9 @@ function compareEntries(
  * starting point. `list_directory` on the excluded path itself still works,
  * because asking for a directory by name is an explicit request.
  *
- * The real answer is honouring `.gitignore`; a fixed list cannot know that a
- * project keeps source in `target/`. That is a separate change.
+ * The fixed list is complemented, not replaced, by honouring `.gitignore` during
+ * the walk (see {@link ./gitignore.ts}): a fixed list cannot know that a project
+ * keeps source in `target/`, but the project's own ignore file can.
  */
 const DEFAULT_EXCLUDED_DIRECTORIES: readonly string[] = [
   '.git',
@@ -89,6 +91,25 @@ const DEFAULT_EXCLUDED_DIRECTORIES: readonly string[] = [
 
 function escapeHtmlLike(value: string): string {
   return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu, '');
+}
+
+/**
+ * Read and parse the `.gitignore` in a directory, if there is one.
+ *
+ * @param absoluteDir - Absolute path to the directory.
+ * @param baseDir - Workspace-relative path of that directory (`''` for root).
+ * @returns The parsed source, or `null` when there is no readable `.gitignore`.
+ */
+async function loadGitignore(
+  absoluteDir: string,
+  baseDir: string,
+): Promise<GitignoreSource | null> {
+  try {
+    const content = await readFile(join(absoluteDir, '.gitignore'), 'utf8');
+    return { baseDir, patterns: parseGitignore(content) };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -207,7 +228,8 @@ export function createFileTools(options: FileToolsOptions): ToolRegistration[] {
       name: 'list_directory',
       description:
         'Recursively list files and directories inside the workspace. ' +
-        'Returns workspace-relative paths with type and size.',
+        'Returns workspace-relative paths with type and size. Entries matched ' +
+        'by a .gitignore in the workspace are omitted.',
       inputSchema: z.object({
         path: z
           .string()
@@ -236,6 +258,14 @@ export function createFileTools(options: FileToolsOptions): ToolRegistration[] {
       const entries: Array<{ path: string; type: 'file' | 'directory'; size: number }> = [];
       let truncated = false;
 
+      // Ignore rules are a stack of `.gitignore` sources from the root down to
+      // the directory being walked; deeper files take precedence on a match.
+      const sources: GitignoreSource[] = [];
+      const rootIgnore = await loadGitignore(root, '');
+      if (rootIgnore !== null) {
+        sources.push(rootIgnore);
+      }
+
       const walk = async (current: string, depth: number): Promise<void> => {
         if (depth > maxDepth || entries.length >= maxEntries) {
           truncated = entries.length >= maxEntries;
@@ -256,12 +286,25 @@ export function createFileTools(options: FileToolsOptions): ToolRegistration[] {
             // Skipped entirely rather than listed but not descended into: a
             // directory that appears empty is a different, and more misleading,
             // claim than one that is simply not shown.
-            if (excluded.has(dirent.name)) {
+            if (excluded.has(dirent.name) || isPathIgnored(sources, childRelative, true)) {
               continue;
             }
             entries.push({ path: childRelative, type: 'directory', size: 0 });
+
+            // A nested `.gitignore` narrows the rules for this subtree only;
+            // it is pushed for the descent and popped on the way back out.
+            const nested = await loadGitignore(child, childRelative);
+            if (nested !== null) {
+              sources.push(nested);
+            }
             await walk(child, depth + 1);
+            if (nested !== null) {
+              sources.pop();
+            }
           } else if (dirent.isFile()) {
+            if (isPathIgnored(sources, childRelative, false)) {
+              continue;
+            }
             const info = await stat(child).catch(() => null);
             entries.push({ path: childRelative, type: 'file', size: info?.size ?? 0 });
           }
