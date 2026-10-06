@@ -6,6 +6,9 @@
 >
 > **Última atualização:** 2026-10-06 · **Commit atual:** confira com
 > `git log -1 --oneline`
+>
+> **Como ler isto rápido:** §2 diz o que está pronto, §3 lista o que está bloqueado
+> (e como destravar), §5 item 17 é onde a fatia atual parou.
 
 ---
 
@@ -92,7 +95,7 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 | 19 | O terminal não executava nada | 🟡 **DESTRAVADO, DESLIGADO POR PADRÃO.** O sandbox Docker continua sendo o padrão e **nada o infere**: sem Docker o terminal só sabia explicar a própria recusa — e um sandbox que não roda não é mais seguro, é só quebrado. Criado `common/docker/localRunner.ts` (`LocalRunner`) implementando o **mesmo contrato** `run()` do `DockerSandbox`; o tipo `Sandbox` virou `Pick<DockerSandbox, 'run'>`, então os tools não sabem qual receberam. Ligado apenas por `NEXUS_UNSANDBOXED=1`, lido em `common/index.ts` — **nunca do webview**, que não pode desligar isolamento — e o `RUN.sh` imprime um aviso explícito. **O rótulo é a história de segurança:** todo resultado reporta `image: 'local (sem isolamento)'` e **nunca** a imagem pedida, porque nada rodou nela; um log que não distingue contêiner de host é pior que log nenhum. `shellArgv` é parametrizado por plataforma para o ramo Windows ser testável a partir do Linux. Testes: `localRunner.test.ts` (7 casos, executor injetado, nenhum processo real) e `core.test.ts` (4 casos, incluindo "sandbox por padrão" e "injeção vence a flag"). |
 | 20 | Não dava para abrir pastas | ✅ **CORRIGIDO.** O explorador era uma lista plana **só de arquivos**: `list_directory` devolvia pastas e arquivos, mas a UI descartava os diretórios — abrir uma pasta era impossível, e não havia ação de "abrir arquivo". Agora o explorador lista arquivos **e** subdiretórios da pasta atual, clicar numa pasta entra nela, e há breadcrumb + `..` para subir, com a raiz sempre acessível. Abrir um arquivo insere o registro na lista de abertos **antes** de lê-lo — o explorador lista uma pasta por vez, então o editor não tinha onde pôr conteúdo que ainda não tinha visto. `FileExplorer` trocou o modelo de `files` por `entries` + `statuses` + `currentDir`. |
 | 21 | Configurações duras no Ollama | ✅ **CORRIGIDO.** O modal tinha um único campo de URL do Ollama e o seletor de modelo era uma lista **falsa** de nomes fixos. Agora: **lista de provedores** (nome, tipo `ollama`/`openai` e URL), botão **Sincronizar modelos** que pergunta ao provedor ativo via a nova tool `list_models` e lista os nomes para o usuário escolher o ativo; o seletor do cabeçalho é construído dos modelos sincronizados. **Formato verificado contra o servidor vivo** (`/api/tags` → `{models:[{name}]}`; `/v1/models` → `{object:list,data:[{id}]}`), não assumido; a tool nasceu com `fetch` injetável e testes. **Consequência que quebrou o CI:** a superfície subiu de 5 para 6 tools, e a lista é afirmada em **três lugares** — smoke test TS, composição do core e teste e2e do Rust; atualizei dois e esqueci o terceiro. Lição: antes de adicionar tool, `grep` por todas as listas exatas. |
-| 24 | O PR #7 foi mergeado **sem os dois últimos commits** (correção do travamento e botão Salvar) | 🟡 **PENDENTE DE CI.** `7d5f2f6` mergeou só `651de18` + `dc6253d`; `471b1fc` (`async` + `spawn_blocking`, botão Salvar) e `b98ea32` (docs) ficaram para trás no branch. E **depois do merge nenhum workflow roda nesse branch**: `build.yml` dispara em `push` para `main` ou `pull_request`, e sem PR aberto não há evento — foi por isso que o CI "parou" de atualizar. Os dois commits foram levados para o branch novo **`fix/main-thread-freeze`**; abrir o PR é o que faz o CI julgar o Rust, que **não compila localmente** (falta `libdbus-1-dev`/GTK de sistema e `sudo` pede senha). **Enquanto isso não for mergeado, o `.exe` continua travando** — o binário precisa ser reconstruído depois do merge. |
+| 24 | O PR #7 foi mergeado **sem os dois últimos commits** (correção do travamento e botão Salvar) | ✅ **RESOLVIDO no PR #8** (`091c0dd`). `7d5f2f6` (merge do #7) trouxe só `651de18` + `dc6253d`; `471b1fc` (`async` + `spawn_blocking`, botão Salvar) e `b98ea32` (docs) ficaram para trás, e **depois do merge nenhum workflow rodava naquele branch** (`build.yml` dispara em `push` para `main` ou `pull_request`; sem PR aberto não há evento — foi por isso que o CI pareceu parar). Os dois commits foram levados para o `feat/editor-context`, e o PR **#8** deu **7/7 checks verdes** — incluindo o `cargo check` + `cargo test` que o Rust precisa (ele **não compila na máquina do dono**: falta `libdbus-1-dev`/GTK de sistema e `sudo` pede senha). O log do job é a prova de runtime: `mcp handshake ok: negotiated protocol 2025-11-25, 11 tools, tools/call ok` e `17 passed; 0 failed`. **O `.exe` existente ainda é anterior a isso** — precisa ser reconstruído para o travamento ir embora. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -347,6 +350,18 @@ node dist/core.mjs      # core como MCP server stdio
       seleção (offset → linha/coluna 1-based). Abrir outro arquivo zera o caret (a
       posição do arquivo anterior não existe no novo), o relatório é reenviado
       quando o handshake completa, e falha é silenciosa — no browser não há core.
+    - **Um relatório por vez, coalescido** (correção após revisão): toda chamada de
+      tool **serializa na única sessão do core** (`with_core` segura o `Mutex`), e
+      `ask_agent` segura essa sessão por todo o tempo do modelo. Um relatório
+      enviado durante um turno **espera** ali — então um relatório por tecla
+      empilharia uma thread de blocking pool bloqueada por relatório até o turno
+      acabar. Agora só existe **um em voo**: o estado mais recente espera a
+      resposta anterior e um único relatório final é enviado, o que mantém o core
+      atualizado sem enfileirar nada. (Issue de fundo: §5 item 6-a, fila no sidecar.)
+      **A/B medido no browser** (stub com latência de 2 s simulando o mutex preso,
+      10 teclas): antes **11 envios com até 4 simultâneos**; depois **4 envios, máx.
+      1**, e o último relatório resolvido bate com o cursor do DOM — coalescer não
+      perde o estado final.
     **Verificado:** 214 testes (eram 204; +10 em `editorTools.test.ts`), o smoke com
     o **round-trip `set_editor_context` → `get_editor_context`** sobre stdio real, e
     no browser com um `window.__TAURI__` **stubado** registrando as chamadas:
@@ -358,9 +373,11 @@ node dist/core.mjs      # core como MCP server stdio
 **Ao retomar.** Todo o **LSP bridge** (§5 item 14) está implementado e mergeado:
 cliente, orquestração, tools MCP (`get_diagnostics`, `configure_language_server`,
 `list_language_servers`) e fiação na UI. O `get_editor_context` também deixou de ser
-placeholder (§5 item 17). O que resta é **melhoria** — conciliada
-com o `docs/roadmap.md` ("Next"): (1) fila de requisições no sidecar em vez do
-mutex bloqueante (§5 item 6-a); (2) era moderna da spec 2026-07-28 (§5 item 6-d);
+placeholder (§5 item 17) e a correção do travamento da janela está em `main` desde o
+PR #8 (§3 item 24 — falta só **reconstruir o `.exe`**). O que resta é **melhoria** —
+conciliada com o `docs/roadmap.md` ("Next"): (1) fila de requisições no sidecar em vez
+do mutex bloqueante (§5 item 6-a) — é a raiz do problema que o item 17 contornou com
+coalescência; (2) era moderna da spec 2026-07-28 (§5 item 6-d);
 (3) WASM target para `common/` (exige auditoria DOM-free). Itens de
 roadmap ainda não priorizados: plugin marketplace com assinatura, MCP remoto via
 Streamable HTTP, integração DAP. Para retomar comigo, ler §3 linhas 16–23
