@@ -68,8 +68,8 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 | 8 | `npm run typecheck`: 5 erros em `common/mcp/server.test.ts` | ✅ **CORRIGIDO.** Linhas 87/92/96/111/116, todos a mesma causa: os dois `const handler` extraídos perdiam a **tipagem contextual**, então `type: 'text'` **alargava para `string`** e o retorno deixava de ser atribuível a `TextContentBlock`. Os arrows inline (linhas 25/63/75) **não** erravam — prova de que a causa era o literal solto, não a API. Corrigido usando o helper `textResult` que já era exportado. **Os tipos da lib estavam corretos; o teste é que estava.** |
 | 9 | `build()` e `serveStdio()` sem cobertura de runtime | ✅ **RESOLVIDO.** Nenhum dos 8 arquivos de teste chamava `build()` nem `serveStdio()` — as duas apareciam apenas no bootstrap (`common/index.ts`) e em comentários. Ou seja, a fronteira com o SDK v2, a parte mais arriscada do projeto, **nunca havia executado**: o typecheck provava só que os tipos encaixam, não que o SDK converte os schemas Zod em runtime. Criado `scripts/smoke-mcp.ts` + o passo `Smoke test (MCP over stdio)` no CI (depois do build, pois sobe `dist/core.mjs`). Run 37404728248: verde nos 6 jobs, inclusive Windows. |
 | 10 | A UI nunca era empacotada pelo Vite | ✅ **CORRIGIDO no código.** `npm run build:desktop` não rodava em lugar nenhum: o `tsc` aprovava a UI, mas aprovar tipos não diz nada sobre o Vite resolver `@tailwindcss/vite`, `@vitejs/plugin-react`, o `@theme` do Tailwind v4 e o alias `@core`. Adicionado o passo `Build (desktop)` (commit `29b9e0a`). **Resultado do run ainda não conferido** — a API do GitHub estourou o limite de 60 req/h sem autenticação, e o badge público não expôs o status. |
-| 11 | O host desktop não existia (ponte IPC sem lugar para viver) | 🟡 **HOSPEDEIRO PRONTO, ponte pendente.** Criado `src-tauri/` (`Cargo.toml`, `tauri.conf.json`, `capabilities/default.json`, ícone, um único comando `shell_info`) sob um workflow `tauri` **separado**, que roda `cargo check` só quando `src-tauri/**` ou `variants/desktop/**` mudam — compilar Tauri leva minutos e não deve travar o loop rápido do TypeScript. O passo captura a saída do cargo e a reemite como `::error::`, porque log bruto do Actions exige autenticação e anotação não: sem isso, uma falha do Rust seria só um X vermelho. Run 37404728248/641fa13: **`cargo check` verde**. |
-| 12 | **Eu inventei três métodos de API do Rust** | ✅ **CORRIGIDO — leia isto antes de escrever Rust aqui.** Usei `command.get_stdin()`, `get_stdout()` e `get_stderr()` afirmando que existiam desde o Rust 1.57. Existem `get_program`, `get_args` e `get_current_dir` — mas **os três getters de stream não existem**. O CI apontou `error[E0599]` nas três linhas. É exatamente o erro que a regra nº 1 do `AGENTS.md` existe para pegar, e eu caí nele por confiar na memória em vez de conferir. Substituído por testes **comportamentais** (sobem `printf`/`sh` de verdade e leem stdout/stdin/stderr), que provam **mais** do que introspecção provaria. O canal de `::error::` no workflow `tauri` foi o que tornou isso diagnosticável sem acesso ao log bruto. |
+| 11 | O host desktop não existia (ponte IPC sem lugar para viver) | 🟡 **HOSPEDEIRO PRONTO, ponte pendente.** Criado `src-tauri/` (`Cargo.toml`, `tauri.conf.json`, `capabilities/default.json`, ícone, um único comando `shell_info`) sob um workflow `tauri` **separado**, que roda `cargo check` só quando `src-tauri/**` ou `variants/desktop/**` mudam — compilar Tauri leva minutos e não deve travar o loop rápido do TypeScript. O passo captura a saída do cargo e a reemite como `::error::`, porque log bruto do Actions exige autenticação e anotação não: sem isso, uma falha do Rust seria só um X vermelho. Run do commit `641fa13`: **`cargo check` verde**. Run de `fb2cff6`: **`cargo check` e `cargo test` verdes**. |
+| 12 | **Eu inventei três métodos de API do Rust** | ✅ **CORRIGIDO e confirmado verde — leia isto antes de escrever Rust aqui.** Usei `command.get_stdin()`, `get_stdout()` e `get_stderr()` afirmando que existiam desde o Rust 1.57. Existem `get_program`, `get_args` e `get_current_dir` — mas **os três getters de stream não existem**. O CI apontou `error[E0599]` nas três linhas. É exatamente o erro que a regra nº 1 do `AGENTS.md` existe para pegar, e eu caí nele por confiar na memória em vez de conferir. Substituído por testes **comportamentais** (sobem `printf`/`sh` de verdade e leem stdout/stdin/stderr), que provam **mais** do que introspecção provaria. O canal de `::error::` no workflow `tauri` foi o que tornou isso diagnosticável sem acesso ao log bruto. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -122,14 +122,21 @@ node dist/core.mjs      # core como MCP server stdio
    `npm ci` justamente no passo que se queria endurecer.
 5. ✅ **`Build (desktop)` no CI** (commit `29b9e0a`): o Vite agora empacota a UI de
    verdade. Resultado do run ainda não conferido (§3, linha 10).
-6. 🟡 **Hospedeiro Tauri criado; a ponte IPC é o próximo passo.** `src-tauri/` tem
-   `Cargo.toml`, `tauri.conf.json`, capabilities e um único comando (`shell_info`), e o
-   workflow `tauri` roda `cargo check` (resultado ainda não conferido). O passo seguinte
-   é decidir **como o shell Rust alcança o core TypeScript**: o caminho natural é
-   **sidecar** — o Rust sobe `node dist/core.mjs` e fala MCP por stdio, o que preserva o
-   core headless (`common/`) em vez de reimplementá-lo em Rust, ao custo de exigir um
-   runtime Node na máquina (ou de empacotar um). Depois disso, trocar a simulação de
+6. 🟡 **Sidecar começado e verificado; falar MCP completo é o próximo passo.** O
+   `src-tauri/src/bridge.rs` já **sobe** `node dist/core.mjs` e espera a linha de boot no
+   `stderr` (`spawn_core` + `wait_for_boot`), com `shell_info` e `core_boot_probe` expostos
+   como comandos. Run de `fb2cff6`: `cargo check` e `cargo test` **verdes**, incluindo os
+   testes que sobem `printf`/`sh` de verdade e leem stdin/stdout/stderr — logo o
+   encanamento de processo está provado, não só compilado.
+
+   **O que ainda falta:** o Rust **não fala MCP** — ele não envia `initialize` nem lê
+   `tools/list` do filho. O `core_boot_probe` prova que o processo sobe; provar que a
+   conversa funciona exige JSON-RPC delimitado por linha sobre o stdin/stdout do filho, que
+   é a fatia de complexidade real. Depois disso, trocar a simulação de
    `variants/desktop/src/App.tsx` por chamadas reais ao shell.
+
+   Decisão registrada: **sidecar** (não reimplementar o core em Rust), preservando o
+   `common/` headless. O custo é exigir um runtime Node na máquina, ou empacotar um.
 7. Avaliar se o Monaco volta a ser usado (foi trocado por `<textarea>` para não
    adicionar dependência não verificada).
 8. ✅ **Aviso de depreciação resolvido.** `actions/checkout@v4`,
