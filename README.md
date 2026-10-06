@@ -5,8 +5,13 @@ an **event-sourced execution logger**, a **Docker terminal sandbox** and a
 **dynamic plugin system**.
 
 The headless core lives in `common/` (no DOM, no React). UI/platform targets live
-in `variants/`. See [`docs/architecture.md`](docs/architecture.md) for the full
-picture and [`docs/roadmap.md`](docs/roadmap.md) for status.
+in `variants/`.
+
+**Retomando o projeto?** Leia [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md) — é
+o arquivo de rastro com status, bloqueios e próximos passos. Agentes de IA devem ler
+também [`AGENTS.md`](AGENTS.md). Arquitetura em
+[`docs/architecture.md`](docs/architecture.md); roadmap em
+[`docs/roadmap.md`](docs/roadmap.md).
 
 ---
 
@@ -61,6 +66,13 @@ npm run lint         # eslint .
 npm run build        # typecheck + bundle the Node core to dist/core.mjs
 npm run dev:desktop  # run the desktop variant (Vite)
 ```
+
+If Node.js is not available on your machine, **GitHub is the build environment**:
+push a branch and the `build` workflow runs `lint → typecheck → test → build` on a
+3-OS × 2-Node matrix. To produce the initial `package-lock.json` without a local
+Node install, run the **bootstrap-lockfile** workflow (Actions → Run workflow) and
+commit the `package-lock` artifact; then switch the install step back to `npm ci`
+and re-enable `cache: npm`.
 
 The core is a stdio MCP server. It must **never** write logs to stdout — stdout is
 the JSON-RPC channel. Use `console.error` for diagnostics.

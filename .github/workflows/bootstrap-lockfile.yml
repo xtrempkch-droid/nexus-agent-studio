@@ -1,0 +1,54 @@
+name: bootstrap-lockfile
+
+# Gera o `package-lock.json` usando um runner do GitHub.
+#
+# Por que existe: o ambiente onde o projeto foi escrito não tinha Node.js/npm,
+# então o lockfile nunca pôde ser criado localmente. Como os runners têm Node, o
+# GitHub é o lugar certo para produzi-lo. `--package-lock-only` resolve a árvore
+# de dependências e escreve apenas o lockfile, sem instalar nada.
+#
+# Depois de commitar o artefato como `package-lock.json`:
+#   1. em build.yml, volte o passo de install para `npm ci`;
+#   2. reative `cache: npm` no actions/setup-node.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    name: generate package-lock.json
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Generate lockfile
+        run: npm install --package-lock-only --no-audit --no-fund
+
+      - name: Summary
+        run: |
+          {
+            echo "### package-lock.json gerado"
+            echo ""
+            echo "Baixe o artefato \`package-lock\` abaixo e commite-o na raiz do repositório."
+            echo "Depois troque o passo de install do \`build.yml\` de volta para \`npm ci\`"
+            echo "e reative \`cache: npm\`."
+            echo ""
+            echo "Dependências resolvidas: $(node -e "console.log(Object.keys(require('./package-lock.json').packages||{}).length)") entradas"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-lock
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 30
