@@ -1,0 +1,111 @@
+name: desktop-binary
+
+# Produces a runnable desktop binary as a downloadable artifact.
+#
+# Why this exists: until now nobody had ever *opened* this app. The development
+# machine has no Node and the CI runners have no display, so the project existed
+# only as code that compiles. `tauri build --no-bundle` skips the installer step
+# entirely — which also means it needs no `.ico`/`.icns` — and leaves a plain
+# executable that can be downloaded and run.
+#
+# Also runs on push when the shell or the UI changes, so the artifact stays
+# current without anyone having to remember to trigger it. Drop that trigger if
+# the build time becomes annoying; `workflow_dispatch` still works.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/**'
+      - 'variants/desktop/**'
+      - '.github/workflows/desktop-binary.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    name: binary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.04 rather than `latest` on purpose. A binary links against the glibc
+        # it was built with, and one built on 22.04 (glibc 2.35) still runs on
+        # 24.04 (2.39), while a binary built on 24.04 does *not* run on 22.04.
+        # Widening compatibility costs nothing here.
+        os: [ubuntu-22.04]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # Both are needed by the packaged app: the frontend is embedded into the
+      # binary by `tauri::generate_context!`, and the shell spawns
+      # `dist/core.mjs` at runtime, so it has to ship next to the executable.
+      - name: Build frontend and core
+        run: |
+          npm run build
+          npm run build:desktop
+
+      # Package names differ across Ubuntu releases (4.0 on 22.04, 4.1 on
+      # 24.04), so each is attempted on its own and a missing one only warns
+      # instead of failing the job.
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          for pkg in libwebkit2gtk-4.1-dev libwebkit2gtk-4.0-dev libgtk-3-dev librsvg2-dev patchelf libssl-dev libayatana-appindicator3-dev libappindicator3-dev; do
+            sudo apt-get install -y --no-install-recommends "$pkg" \
+              || echo "::warning::could not install $pkg"
+          done
+
+      - name: Setup Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-binary-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # `npx` is deliberate: it runs the CLI without adding it to package.json,
+      # so `package-lock.json` stays valid and the `npm ci` step keeps working.
+      # Declaring `@tauri-apps/cli` as a dependency would invalidate the lockfile.
+      - name: Build the binary
+        run: npx --yes @tauri-apps/cli@2.12.1 build --no-bundle --ci
+
+      - name: Report what was produced
+        run: |
+          echo "=== release directory ==="
+          ls -la src-tauri/target/release/ | head -30
+          echo
+          echo "=== the two files the artifact carries ==="
+          ls -la src-tauri/target/release/nexus-agent-studio-shell dist/core.mjs
+
+      # Both files land at the root of the downloaded archive, which is the
+      # layout the shell expects: it resolves `dist/core.mjs` relative to the
+      # directory it is run from.
+      - name: Upload the binary
+        uses: actions/upload-artifact@v5
+        with:
+          name: nexus-agent-studio-linux
+          path: |
+            src-tauri/target/release/nexus-agent-studio-shell
+            dist/core.mjs
+          if-no-files-found: error
+          retention-days: 30

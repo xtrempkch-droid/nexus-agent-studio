@@ -73,6 +73,7 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 | 13 | O Rust não falava MCP | ✅ **RESOLVIDO e confirmado.** `src-tauri/src/mcp.rs` implementa `initialize` + `notifications/initialized` + `tools/list` sobre JSON-RPC delimitado por linha, com loop de leitura por `id` (pulando notificações no canal compartilhado), timeout por passo e shutdown fechando o `stdin` primeiro (o sinal gracioso portável da spec). O teste end-to-end sobe o core **real** e afirma as 5 tools; CI verde. **Fato medido, não suposto:** a anotação `::notice::` reportou `negotiated protocol 2025-11-25, 5 tools`. O core **não aceita** `2026-07-28` no handshake legado — ele negocia para **2025-11-25**. Se eu tivesse *afirmado* a versão em vez de *pedi-la*, o teste teria falhado **com o handshake funcionando**. Corolário: para usar recursos da era 2026-07-28 é preciso o fluxo moderno (`server/discover` + metadados em `_meta`), porque a era moderna **não tem** handshake `initialize` para negociar. |
 | 14 | Cada comando abria e matava um core | ✅ **RESOLVIDO e confirmado.** `ShellState` guarda `Mutex<Option<CoreSession>>`: sobe no primeiro uso, reutiliza, e **substitui se o processo morreu** — a spec diz que o cliente *deveria* reiniciar um servidor que saiu inesperadamente, e o protocolo é stateless. Adicionado `tools/call` e o comando `call_core_tool`. A anotação `::notice::` do run confirmou o caminho completo: `2025-11-25, 5 tools, tools/call ok`. **Limitação conhecida e documentada:** o mutex serializa as chamadas (obrigatório, porque stdio é um canal único), então uma tool lenta bloqueia as outras — uma fila de requisições está na §5. |
 | 15 | A UI nunca falou com o core | 🟡 **PARCIALMENTE RESOLVIDO.** `variants/desktop/src/lib/shell.ts` é a ponte tipada, e é o **único** lugar que sabe como a webview alcança o shell. O crachá do cabeçalho agora reporta o que o core negociou quando roda dentro do shell, e mantém "Simulação" no browser — degradar honestamente importa mais que parecer conectado. `app.withGlobalTauri: true` evita dependência nova, logo **não invalida o lockfile**; trocar por `@tauri-apps/api` depois altera um arquivo só. Os handlers do agente **ainda simulam**. **Verificado:** compila e empacota (CI verde). **NÃO verificado:** o comportamento — ver o crachá mudar exige abrir a janela, e não há tela no CI. |
+| 16 | Ninguém nunca abriu o app | 🟡 **WORKFLOW CRIADO, artefato ainda não conferido.** Adicionado `.github/workflows/desktop-binary.yml`: `npx --yes @tauri-apps/cli@2.12.1 build --no-bundle --ci` produz um executável cru (sem instalador e sem exigir `.ico`/`.icns`) e publica o artefato `nexus-agent-studio-linux` junto de `dist/core.mjs`. **ubuntu-22.04 de propósito:** o binário liga contra o glibc do build, e 2.35 roda também no 24.04, mas o inverso não roda. **`npx` em vez de dependência:** declarar `@tauri-apps/cli` invalidaria o `package-lock.json` e quebraria o `npm ci`. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -141,12 +142,13 @@ node dist/core.mjs      # core como MCP server stdio
      A decisão do transporte **foi tomada e é reversível**: `app.withGlobalTauri`
      não adiciona dependência, então não mexe no lockfile, e migrar para
      `@tauri-apps/api` depois altera **um arquivo só**.
-   - **(c) Fazer o build chegar até o usuário — o passo mais valioso hoje.**
-     **Ninguém nunca abriu o app:** a máquina local não tem Node e o CI não tem
-     tela, então até agora ele só existe como código que compila. Um
-     `tauri build --no-bundle` produz um binário cru (sem instalador e sem exigir
-     `.ico`/`.icns`) que o CI pode publicar como artefato para download. É o passo
-     que transforma "compila" em "abre".
+   - **(c) Fazer o build chegar até o usuário.** Workflow `desktop-binary` criado,
+     publicando o executável + `dist/core.mjs` (resultado ainda não conferido).
+     **Para o app funcionar por completo ainda faltam duas coisas na máquina de
+     quem baixar:** o shell sobe o core via `node`, então precisa de **Node
+     instalado**; e o binário precisa de **WebKitGTK** em runtime
+     (`sudo apt install libwebkit2gtk-4.1-0`). Sem Node o app **abre** e o crachá
+     diz "Core indisponível" — que é o comportamento correto, não um bug.
    - **(d) Era moderna** da spec 2026-07-28, que exige o probe `server/discover` e
      metadados por requisição em `_meta`. Ao implementar, respeite a regra: cair
      para o `initialize` em **qualquer** erro não reconhecido, nunca em um código
