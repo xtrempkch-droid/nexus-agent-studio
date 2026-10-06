@@ -46,6 +46,7 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 | 2 | `package-lock.json` ausente → `npm ci` e `cache: npm` falhariam no CI | Mitigado: o `build.yml` cai para `npm install` e não pede cache. Gere o lockfile com o workflow `bootstrap-lockfile` e **volte a usar `npm ci` + `cache: npm`**. |
 | 3 | `git push` requer credenciais | ✅ **RESOLVIDO.** HTTPS não tinha credencial, mas a chave `~/.ssh/id_ed25519` já está autorizada na conta. O remote `origin` foi apontado para SSH: `git@github.com:xtrempkch-droid/nexus-agent-studio.git`. |
 | 4 | A UI desktop é uma **simulação** no browser | Falta a ponte IPC (Electron/Tauri) entre `variants/desktop` e `common/`. Ver §5. |
+| 5 | `npm install` falhava no CI (run #34, os 6 jobs) | ✅ **CORRIGIDO no código.** Causa: `typescript-eslint@8.71.1` declara `peerDependencies.typescript: ">=4.8.4 <6.1.0"` e eu havia declarado `typescript ^7.0.2` → `ERESOLVE`, exit 1 no passo de install, com `lint`/`typecheck`/`test`/`build` **skipped**. Agora `typescript: "~6.0.2"`. Falta o CI confirmar. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -97,13 +98,17 @@ afirmações.**
 | `serveStdio(server)` | `serveStdio` recebe uma **factory** `() => McpServer` | `serveStdio(() => this.build())` |
 | Docker 29.4.2 por CVE-2026-31431 | A CVE é real (`algif_aead`, CVSS 7.8, CISA KEV) mas a correção é **patch de kernel**; o perfil seccomp padrão do Docker **já** bloqueia `AF_ALG` | Isolamento por flags + seccomp padrão; versão do Docker fixada só por reprodutibilidade |
 | `@typescript/native` | Não é publicado; o pacote real é **`@typescript/native-preview`** | Não usado como dependência |
+| TypeScript `^7.0.2` como dependência | Existe (latest = 7.0.2), mas **é incompatível com `typescript-eslint@8`**, que exige `<6.1.0` → `ERESOLVE` e `npm install` aborta | Prendido em `~6.0.2` (= `>=6.0.2 <6.1.0`), que satisfaz o peer e fornece o `tsc` |
 | Vitest `^4.x` | `latest` = **5.0.3** (`V4` = 4.1.11) | Usado `^5.0.3` |
 | Node matrix 22/24/**26** | Node 26 não confirmado | Matriz só com **22 / 24** |
 
 Confirmado como **correto** no prompt: pacotes `@modelcontextprotocol/server` e
 `/client` v2 (2.3.1), `@modelcontextprotocol/sdk` é o v1 legado (não usar),
 `import * as z from 'zod/v4'`, `registerTool(name, {description, inputSchema}, handler)`,
-TypeScript 7.0.2, `@typescript/typescript6` 6.0.2, esbuild 0.28.2, ESLint 10.x.
+`@typescript/typescript6` **existe** (6.0.2 — mas expõe o binário `tsc6`, não `tsc`),
+esbuild 0.28.2, ESLint 10.x. E o padrão de alias para coexistência de duas versões de
+TypeScript descrito no prompt é real: o próprio `typescript-eslint@8.71.1` usa
+`"@typescript/native": "npm:typescript@^7.0.2"` junto de `"typescript": ">=4.8.4 <6.1.0"`.
 
 ## 7. Invariantes do código (não viole)
 

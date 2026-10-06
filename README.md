@@ -30,7 +30,7 @@ assumed.
 | `zod` | `^4.6.5` | `import * as z from 'zod/v4'` (canonical Zod 4 subpath) |
 | `react` / `react-dom` | `^19.3.0` | Desktop UI. **There is no React 20.** |
 | `tailwindcss` | `^4.3.3` | CSS-first `@theme`, no `tailwind.config.js`. **There is no Tailwind 5.** |
-| `typescript` | `^7.0.2` | Compiler toolchain |
+| `typescript` | `~6.0.2` | Compiler toolchain. **Not 7.x** — see the note below. |
 | `esbuild` | `^0.28.2` | Core bundler |
 | `vite` | `^8.3.2` | Desktop variant bundler |
 | `vitest` | `^5.0.3` | Tests |
@@ -47,8 +47,14 @@ assumed.
 
 ### Verification notes
 
-- `@typescript/typescript6@6.0.2` exists and is used for programmatic
-  (typescript-eslint) API access.
+- **TypeScript is pinned to `~6.0.2`, not 7.x.** `typescript-eslint@8.71.1`
+  declares `peerDependencies.typescript: ">=4.8.4 <6.1.0"`. TypeScript 7.0.2 falls
+  outside that range, so `npm install` aborts with `ERESOLVE` and **no CI step ever
+  runs** (lint/typecheck/test/build are all skipped). `~6.0.2` means
+  `>=6.0.2 <6.1.0`, which matches the peer range exactly and still ships the real
+  `tsc` binary. Do not widen this range without re-checking that peer.
+- `@typescript/typescript6@6.0.2` exists, but it exposes its binary as **`tsc6`**,
+  not `tsc` — so aliasing `typescript` to it would break `npm run typecheck`.
 - With TypeScript ≥ 6, `@types/*` is no longer auto-included, so `tsconfig.json`
   sets `"types": ["node"]`.
 - `serveStdio` receiving a **server instance** instead of a factory is the most

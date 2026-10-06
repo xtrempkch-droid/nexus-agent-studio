@@ -29,7 +29,7 @@ completa de correções está em `docs/PROJECT_STATE.md` §6.
 | `zod` | `^4.6.5` | `import * as z from 'zod/v4'` |
 | `react` / `react-dom` | `^19.3.0` | **não existe React 20** |
 | `tailwindcss` | `^4.3.3` | CSS-first `@theme`, sem `tailwind.config.js` |
-| `typescript` | `^7.0.2` | `baseUrl` é proibido (deprecado) |
+| `typescript` | `~6.0.2` | **NÃO suba para 7.x** — `typescript-eslint@8` exige `>=4.8.4 <6.1.0`; TS 7 faz o `npm install` falhar com ERESOLVE. `baseUrl` é proibido (deprecado) |
 | `vite` / `vitest` / `eslint` | `^8.3.2` / `^5.0.3` / `^10.12.0` | |
 | Node.js | `>=22` | CI: 22 (LTS), 24 (Active LTS) |
 

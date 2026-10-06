@@ -24,8 +24,10 @@ Leia os dois antes de propor mudanças.
 ## Versões verificadas (2026-10-05)
 
 React `^19.3.0` (não existe React 20) · Tailwind `^4.3.3` (não existe Tailwind 5,
-o `@theme` CSS-first é do v4) · Zod `^4.6.5` via `zod/v4` · TypeScript `^7.0.2` ·
-`@modelcontextprotocol/server` `^2.3.1` · Node `>=22`.
+o `@theme` CSS-first é do v4) · Zod `^4.6.5` via `zod/v4` · TypeScript `~6.0.2`
+(**não** 7.x: `typescript-eslint@8` exige `<6.1.0`, senão o `npm install` falha com
+ERESOLVE e o CI nem chega ao typecheck) · `@modelcontextprotocol/server` `^2.3.1` ·
+Node `>=22`.
 
 Ao terminar uma tarefa, atualize `docs/PROJECT_STATE.md` (§2 e §5) para manter a
 continuidade entre sessões.
