@@ -553,6 +553,7 @@ mod tests {
                 "list_models",
                 "read_file",
                 "run_terminal_command",
+                "set_editor_context",
                 "write_file",
             ],
             "tool list did not match the expected surface"

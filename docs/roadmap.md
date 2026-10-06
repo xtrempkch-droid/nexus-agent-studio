@@ -41,7 +41,8 @@
       - [x] `get_diagnostics` / `configure_language_server` / `list_language_servers`
             MCP tools + `LanguageServerManager` orchestration
       - [x] UI wiring (check button, auto-check on open/save, settings section)
-- [ ] Feed `get_editor_context` from the UI (cursor/selection are still not pushed)
+- [x] Feed `get_editor_context` from the UI — `set_editor_context` (partial patch,
+      debounced caret reporting, `languageId` derived in the core) + UI wiring
 - [ ] WASM compile target for `common/` (requires DOM-free audit)
 - [ ] Plugin marketplace with signature verification (`*.plg` signed bundles)
 - [ ] Remote MCP over Streamable HTTP for team workspaces

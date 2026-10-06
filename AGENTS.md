@@ -94,7 +94,15 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   renomear uma tool, atualize os três ou o CI fica vermelho: `common/core.test.ts`
   (lista ordenada), `scripts/smoke-mcp.ts` (`EXPECTED_TOOLS`, conta exata) e
   `src-tauri/src/mcp.rs` (teste e2e `handshakes_with_the_real_core`). A surface
-  atual são **10 tools**.
+  atual são **11 tools**.
+- **No shell (`src-tauri`), comando síncrono roda na main thread.** Qualquer comando
+  que bloqueie — chamada ao core (`call_core_tool`), handshake, probe, shutdown de
+  sessão — tem de ser `async fn` e rodar o trabalho bloqueante com
+  `tauri::async_runtime::spawn_blocking`. Um comando síncrono bloqueando por
+  segundos congela o WebKitGTK e o app aparece como "não está respondendo" (foi o
+  bug da §5 item 16). Use `tauri::State` só em comandos instantâneos; para os
+  bloqueantes, receba `tauri::AppHandle` e chame `app.state::<T>()` **dentro** do
+  closure `move` do `spawn_blocking` (o `State` pega emprestado do `AppHandle`).
 - **Testes são cross-platform (o CI roda em Ubuntu/Windows/macOS).** Nunca fixe
   strings que dependem de plataforma: use `pathToFileURL`/`fileURLToPath`,
   `isAbsolute`/`join` (`node:path`) e compare contra o mesmo helper em vez de um

@@ -191,22 +191,29 @@ fn shell_info() -> String {
 /// bridge. It answers "can this machine actually run the core?" with evidence
 /// from the real process rather than an assumption.
 #[tauri::command]
-fn core_boot_probe(state: tauri::State<'_, ShellState>) -> Result<String, String> {
-    let config = CoreConfig::for_app_root(&state.app_root);
-    let workspace = state
-        .workspace_root
-        .lock()
-        .map_err(|_| "the workspace lock was poisoned".to_string())?;
-    let mut child = spawn_core(&config, &workspace).map_err(|error| error.to_string())?;
+async fn core_boot_probe(app: tauri::AppHandle) -> Result<String, String> {
+    // Blocking work goes on the blocking pool: see `call_core_tool` for why the
+    // main thread must stay free.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ShellState>();
+        let config = CoreConfig::for_app_root(&state.app_root);
+        let workspace = state
+            .workspace_root
+            .lock()
+            .map_err(|_| "the workspace lock was poisoned".to_string())?;
+        let mut child = spawn_core(&config, &workspace).map_err(|error| error.to_string())?;
 
-    let read = wait_for_boot(&mut child, BOOT_TIMEOUT);
+        let read = wait_for_boot(&mut child, BOOT_TIMEOUT);
 
-    // Reap unconditionally, even when the read failed, so a failed probe cannot
-    // leak a process.
-    let _ = child.kill();
-    let _ = child.wait();
+        // Reap unconditionally, even when the read failed, so a failed probe
+        // cannot leak a process.
+        let _ = child.kill();
+        let _ = child.wait();
 
-    read.map_err(|error| format!("{error:?}"))
+        read.map_err(|error| format!("{error:?}"))
+    })
+    .await
+    .map_err(|error| format!("o probe do core falhou: {error}"))?
 }
 
 /// Describe the long-lived core: its identity, its protocol and its tools.
@@ -214,8 +221,13 @@ fn core_boot_probe(state: tauri::State<'_, ShellState>) -> Result<String, String
 /// The session is started and handshaken on first use, so this is cheap after
 /// that first call.
 #[tauri::command]
-fn core_handshake(state: tauri::State<'_, ShellState>) -> Result<String, String> {
-    state.with_core(describe_core)
+async fn core_handshake(app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ShellState>();
+        state.with_core(describe_core)
+    })
+    .await
+    .map_err(|error| format!("o handshake do core falhou: {error}"))?
 }
 
 /// List the tools and render a one-line description.
@@ -237,13 +249,25 @@ fn describe_core(session: &mut CoreSession) -> Result<String, SessionError> {
 /// The result is returned the way the core produced it: a tool that fails
 /// reports `isError: true` **inside** the result, and the caller decides what
 /// that means. Only a broken exchange becomes an `Err`.
+///
+/// This is deliberately `async` + `spawn_blocking`. A synchronous command runs
+/// on the **main thread**, and `ask_agent` holds the call open for as long as the
+/// model takes — minutes on a slow local model. Blocking the main thread freezes
+/// the WebKitGTK window, which the desktop environment then labels "not
+/// responding". Moving the blocking stdio work off the main thread is the fix;
+/// the longer timeout makes the wait long, and this makes a long wait harmless.
 #[tauri::command]
-fn call_core_tool(
-    state: tauri::State<'_, ShellState>,
+async fn call_core_tool(
+    app: tauri::AppHandle,
     tool: String,
     arguments: Value,
 ) -> Result<Value, String> {
-    state.with_core(move |session| session.call_tool(&tool, arguments, TOOL_TIMEOUT))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ShellState>();
+        state.with_core(move |session| session.call_tool(&tool, arguments, TOOL_TIMEOUT))
+    })
+    .await
+    .map_err(|error| format!("a chamada ao core falhou: {error}"))?
 }
 
 /// The directory the core is editing.
@@ -266,8 +290,15 @@ fn workspace_info(state: tauri::State<'_, ShellState>) -> Result<String, String>
 /// through `switch_workspace`, so it is canonicalised and checked to be a real
 /// directory before anything changes.
 #[tauri::command]
-fn set_workspace(state: tauri::State<'_, ShellState>, path: String) -> Result<String, String> {
-    state.switch_workspace(PathBuf::from(path))
+async fn set_workspace(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    // Switching workspaces shuts the old core down (up to five seconds), so it
+    // belongs on the blocking pool like the other core calls.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ShellState>();
+        state.switch_workspace(PathBuf::from(path))
+    })
+    .await
+    .map_err(|error| format!("a troca de pasta falhou: {error}"))?
 }
 
 /// Open the native folder picker and, if the user chooses a folder, switch the

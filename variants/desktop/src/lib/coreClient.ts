@@ -16,7 +16,7 @@
  */
 
 import { callCoreTool } from './shell.ts';
-import type { InlineHint } from './coreTypes.ts';
+import type { CursorPosition, EditorContext, InlineHint, TextSelection } from './coreTypes.ts';
 
 /** One block of a tool result, as the protocol spells it. */
 interface TextBlock {
@@ -256,4 +256,25 @@ export function getDiagnostics(
   input: { path?: string; waitMs?: number; refresh?: boolean } = {},
 ): Promise<DiagnosticsResult> {
   return callJsonTool<DiagnosticsResult>('get_diagnostics', input);
+}
+
+/** The editor state the UI reports, as `set_editor_context` takes it. */
+export interface EditorContextReport {
+  /** Workspace-relative path of the focused file, or `null` when none is open. */
+  readonly activeFile: string | null;
+  readonly cursor?: CursorPosition;
+  readonly selection?: TextSelection | null;
+  readonly openFiles?: readonly string[];
+  readonly dirty?: boolean;
+}
+
+/**
+ * Tell the core what the editor is showing.
+ *
+ * This is the write half of `get_editor_context`: without it the agent would see
+ * the empty context and have to ask the user which file and which lines they
+ * mean. Fields left out keep their previous value in the core.
+ */
+export function setEditorContext(report: EditorContextReport): Promise<EditorContext> {
+  return callJsonTool<EditorContext>('set_editor_context', report);
 }
