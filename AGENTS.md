@@ -33,7 +33,8 @@ completa de correções está em `docs/PROJECT_STATE.md` §6.
 | `vite` / `vitest` / `eslint` | `^8.3.2` / `^5.0.3` / `^10.12.0` | |
 | Node.js | `>=22` | CI: 22 (LTS), 24 (Active LTS) |
 | `tauri` (crate Rust) | `"2"` → **2.12.1** | faixa major-only de propósito: `tauri-build` é versionado **à parte** (2.7.1 no momento), então fixar os dois em versões exatas arriscaria um par incompatível. O Cargo rejeita combinações inválidas em vez de compilar algo errado. |
-| `@tauri-apps/cli` / `@tauri-apps/api` | **2.12.1** | **Ainda não entram como devDependency:** adicionar uma dep invalida o `package-lock.json` e faz o `npm ci` falhar. Adicione junto com um lockfile regenerado (workflow `bootstrap-lockfile`). O `cargo check` atual não precisa do CLI. |
+| `tauri-plugin-dialog` (crate Rust) | `"2"` | Diálogo nativo de pasta para "abrir projeto". Chamado **do Rust** (`DialogExt`/`FilePath`), **não** do webview — por isso não há dependência npm equivalente e nada muda no `package-lock.json`. |
+| `@tauri-apps/cli` / `@tauri-apps/api` | **2.12.1** | **Ainda não entram como devDependency:** adicionar uma dep invalida o `package-lock.json` e faz o `npm ci` falhar. Adicione junto com um lockfile regenerado (`npm install --package-lock-only` local ou o workflow `bootstrap-lockfile`). O `cargo check` atual não precisa do CLI. |
 
 ### Padrões obrigatórios do MCP v2
 
@@ -51,6 +52,13 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
 
 - O SDK valida os argumentos contra `inputSchema` **antes** do handler rodar;
   argumento inválido vira resultado `{ isError: true }` e o handler **não** roda.
+- O handler recebe um **segundo argumento** `ctx: ServerContext` (SDK v2). Ele
+  expõe `ctx.mcpReq.notify(notification)` para mandar uma notificação pelo mesmo
+  canal da requisição — é o mecanismo do streaming do agente
+  (`notifications/agent/stream`). O core adapta isso num `ToolContext.notify`
+  dependency-light (`common/mcp/types.ts`); handlers nunca importam o tipo do SDK
+  diretamente. Notificação é **best-effort**: um erro ao enviar nunca deve falhar
+  o turno que a originou.
 - **`stdout` é o canal JSON-RPC.** Nunca `console.log` no core — use `console.error`.
 - Com TypeScript ≥ 6, `@types/*` não é mais incluído automaticamente: mantenha
   `"types": ["node"]` no `tsconfig.json`.
@@ -66,19 +74,39 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
 - `@core/*` → `./common/*`.
 - Registro de tools é type-erased (`AnyToolHandler`); as APIs públicas continuam
   genéricas para os handlers inferirem argumentos de `inputSchema`.
+- `common/agent/` fala com modelos via `fetch` injetável (`LlmFetcher` para
+  resposta única, `LlmStreamFetcher` para streaming). `runAgentTurn` aceita um
+  `onProgress` opcional para emitir `answer_delta`/`tool_call`; sem ele nada
+  streama. O `answer_delta.text` é o **preview completo** extraído do JSON ainda
+  incompleto (`answerPreview`), e o valor final vem do parse completo.
+- `variants/desktop/src/lib/shell.ts` é o **único** lugar que sabe como a webview
+  alcança o shell (comandos Tauri + eventos). `lib/coreClient.ts` desembrulha o
+  envelope das tools. Nenhum outro componente importa `window.__TAURI__`
+  diretamente.
 
 ## Como verificar o seu trabalho
 
-Este projeto **compila no GitHub** — a máquina de desenvolvimento original não
-tinha Node/npm, então o CI é a fonte de verdade.
+A máquina de desenvolvimento **agora tem Node 22 + npm 9** (e Rust via `rustup`),
+então a verificação roda localmente:
 
 ```bash
 npm install
 npm run lint && npm run typecheck && npm run test && npm run build
+npm run smoke            # sobe dist/core.mjs e o dirige com um cliente MCP real
+npm run build:desktop    # empacota a UI (Vite + Tailwind v4 + alias @core)
 ```
 
-Ou, sem Node local: faça push de um branch e deixe o workflow `build` rodar
-(lint → typecheck → test → build na matriz de 3 SOs × 2 versões de Node).
+O que **ainda** não roda localmente é o `cargo check` **completo** do
+`src-tauri/src/main.rs`: ele exige as libs de sistema do Tauri (GTK/WebKitGTK), e
+a máquina não tem `sudo` sem senha nem o grupo `docker`. Para o Rust, rode o que
+dá em user-space (`cargo check`/`cargo test` dos módulos livres de Tauri
+`bridge.rs`/`mcp.rs`, isolados num crate temporário) e deixe o workflow `tauri`
+validar o `main.rs` completo no CI.
+
+O GitHub Actions continua sendo a fonte de verdade: o workflow `build` roda
+`lint → typecheck → test → build → smoke` na matriz 3 SOs × 2 Node, e o workflow
+`tauri` roda `cargo check` + `cargo test --include-ignored` quando
+`src-tauri/**`, `variants/desktop/**` ou `common/**` mudam.
 
 **Não declare uma tarefa concluída** se `lint`/`typecheck`/`test`/`build` não
 passaram. Se não puder executá-los, diga isso explicitamente.
