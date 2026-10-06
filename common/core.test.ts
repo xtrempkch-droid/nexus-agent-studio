@@ -18,6 +18,7 @@ describe('createCore', () => {
     const core = createCore({ workspaceRoot: '/ws' });
 
     expect(core.server.getToolNames().sort()).toEqual([
+      'ask_agent',
       'get_editor_context',
       'list_directory',
       'list_models',

@@ -30,6 +30,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 /** Tools the core must advertise, sorted to make the comparison order-independent. */
 const EXPECTED_TOOLS: readonly string[] = [
+  'ask_agent',
   'get_editor_context',
   'list_directory',
   'list_models',

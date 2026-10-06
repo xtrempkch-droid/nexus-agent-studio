@@ -129,6 +129,23 @@ export function listModels(kind: 'ollama' | 'openai', baseUrl: string): Promise<
   return callJsonTool<ModelListResult>('list_models', { kind, baseUrl });
 }
 
+/** The `ask_agent` result. */
+export interface AgentTurnResult {
+  readonly answer: string;
+  readonly toolCalls: readonly string[];
+  readonly steps: number;
+}
+
+/** Ask the agent to perform a task, using the selected provider and model. */
+export function askAgent(input: {
+  readonly prompt: string;
+  readonly model: string;
+  readonly baseUrl: string;
+  readonly kind: 'ollama' | 'openai';
+}): Promise<AgentTurnResult> {
+  return callJsonTool<AgentTurnResult>('ask_agent', input);
+}
+
 /** What a sandboxed command produced. */
 export interface SandboxRun {
   readonly containerId: string;

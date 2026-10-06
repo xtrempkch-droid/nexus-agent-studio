@@ -16,6 +16,7 @@ import { InternalMCPServer } from './mcp/server.ts';
 import { EditorContextStore, createEditorTools } from './mcp/tools/editorTools.ts';
 import { createFileTools } from './mcp/tools/fileTools.ts';
 import { createModelTools } from './mcp/tools/modelTools.ts';
+import { createAgentTools } from './mcp/tools/agentTools.ts';
 import {
   DEFAULT_SANDBOX_IMAGE,
   createTerminalRunner,
@@ -91,19 +92,21 @@ export function createCore(options: CoreOptions): NexusCore {
       : { defaultTimeoutMs: options.terminalTimeoutMs }),
   };
 
-  for (const tool of createFileTools({ workspaceRoot: options.workspaceRoot, logger })) {
+  // The agent is the only tool built *from* the others, so the regular tools are
+  // collected first, registered, and only then handed to the agent. The order
+  // matters: the agent must never be offered to itself.
+  const regularTools = [
+    ...createFileTools({ workspaceRoot: options.workspaceRoot, logger }),
+    ...createEditorTools(editorContext),
+    ...createModelTools(),
+    ...createTerminalTools(terminalOptions),
+  ];
+
+  for (const tool of regularTools) {
     server.registerTool(tool.definition, tool.handler);
   }
 
-  for (const tool of createEditorTools(editorContext)) {
-    server.registerTool(tool.definition, tool.handler);
-  }
-
-  for (const tool of createModelTools()) {
-    server.registerTool(tool.definition, tool.handler);
-  }
-
-  for (const tool of createTerminalTools(terminalOptions)) {
+  for (const tool of createAgentTools({ tools: regularTools })) {
     server.registerTool(tool.definition, tool.handler);
   }
 

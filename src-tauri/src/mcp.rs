@@ -478,6 +478,7 @@ mod tests {
         assert_eq!(
             sorted,
             vec![
+                "ask_agent",
                 "get_editor_context",
                 "list_directory",
                 "list_models",

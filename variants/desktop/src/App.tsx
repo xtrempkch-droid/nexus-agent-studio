@@ -15,10 +15,10 @@
  * preview files below are shown instead; that is a design preview, not a broken
  * app.
  *
- * The **agent** half is still a deterministic simulation. There is no model
- * behind it: the chat replays a fixed script and the refactor it performs is
- * string substitution on the file it already had. Making that real needs an
- * actual LLM, which is its own slice — see `docs/PROJECT_STATE.md`.
+ * The **agent** half now runs a real turn against the provider and model chosen
+ * in the settings: the prompt goes to the model, the model may call the workspace
+ * tools through the core, and its answer is what the user sees. Per-step approval
+ * is not implemented yet, so the agent runs a task to completion.
  *
  * @module variants/desktop/src/App
  */
@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import type { InlineHint } from './lib/coreTypes.ts';
 import { describeCore, isShellAvailable, workspaceInfo } from './lib/shell.ts';
 import {
+  askAgent,
   listDirectory,
   listModels,
   readFile,
@@ -163,9 +164,9 @@ export default function App() {
       id: 'welcome',
       role: 'agent',
       text:
-        'Assistente em simulação: não há modelo conectado a esta janela, então o que eu ' +
-        'responder é roteiro fixo, não raciocínio. O explorador, o editor e o shell falam ' +
-        'com o core de verdade; o chat é a parte que falta.',
+        'Assistente conectado ao modelo escolhido nas configurações. Posso ler, ' +
+        'escrever e listar arquivos e rodar comandos no terminal; o que eu responder ' +
+        'vem do modelo, e as ferramentas que eu chamar aparecem no terminal.',
     },
   ]);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
@@ -368,115 +369,58 @@ export default function App() {
   }, [appendTerminal, loadDirectory]);
 
   /**
-   * Run the tests in the core's sandbox.
+   * Run one agent turn against the selected provider and model.
    *
-   * This used to print a green "1 passed in 0.08s" unconditionally, which was
-   * the most convincing lie in the app: it looked like evidence and was a
-   * constant. What is shown now is whatever the sandbox returned, including its
-   * refusal to run at all.
+   * This replaced the fixed-script chat. The prompt goes to the model, the model
+   * may call the workspace tools through the core, and its answer is what the
+   * user sees. No model selected is an ordinary state, reported plainly instead
+   * of faked.
    */
-  const runPytest = useCallback(() => {
-    if (!isShellAvailable()) {
-      appendTerminal(line('system', 'Pré-visualização: sem sandbox para executar testes.'));
-      return;
-    }
-
-    setSandboxStatus('executing');
-    appendTerminal(line('system', 'Executando em ambiente isolado...'));
-
-    void runInSandbox('pytest -q')
-      .then((run) => {
-        if (run.stdout.trimEnd() !== '') {
-          appendTerminal(line('stdout', run.stdout.trimEnd()));
-        }
-        if (run.stderr.trimEnd() !== '') {
-          appendTerminal(line('stderr', run.stderr.trimEnd()));
-        }
-        appendTerminal(
-          line('system', run.timedOut ? 'tempo esgotado' : `saída ${String(run.exitCode)}`),
-        );
-        setSandboxStatus(run.exitCode === 0 ? 'success' : 'error');
-      })
-      .catch((error: unknown) => {
-        appendTerminal(line('stderr', String(error)));
-        setSandboxStatus('error');
-      });
-  }, [appendTerminal]);
-
-  const applyRefactor = useCallback(() => {
-    const target = files.find((file) => file.path === 'src/main.py');
-    if (target === undefined) {
-      return;
-    }
-
-    const updated = target.content.replace(
-      '        return {"mean": mean, "total": total}',
-      [
-        '        variance = sum((x - mean) ** 2 for x in values) / len(values)',
-        '        return {',
-        '            "mean": mean,',
-        '            "std_dev": math.sqrt(variance),',
-        '            "total": total,',
-        '        }',
-      ].join('\n'),
-    );
-
-    updateFile('src/main.py', updated, 'modified');
-    selectFile('src/main.py');
-    setDiffText(
-      [
-        '--- src/main.py',
-        '+++ src/main.py',
-        '+        variance = sum((x - mean) ** 2 for x in values) / len(values)',
-        '+        return {',
-        '+            "mean": mean,',
-        '+            "std_dev": math.sqrt(variance),',
-        '+            "total": total,',
-        '+        }',
-        '-        return {"mean": mean, "total": total}',
-      ].join('\n'),
-    );
-    setBottomTab('diff');
-    appendTerminal(line('system', 'WRITE: src/main.py atualizado com desvio padrão.'));
-    runPytest();
-  }, [appendTerminal, files, runPytest, selectFile, updateFile]);
-
   const handleSend = useCallback(
     (text: string) => {
       appendMessage({ role: 'user', text });
       setBusy(true);
-      appendMessage({ role: 'agent', text: 'Analisando código do projeto e planejando ações...', thinking: true });
 
-      globalThis.setTimeout(() => {
+      const provider = activeProvider;
+      const modelName = activeModel;
+      if (!isShellAvailable() || provider === null || modelName === '') {
         setBusy(false);
-        setMessages((previous) => previous.filter((message) => message.thinking !== true));
+        appendMessage({
+          role: 'agent',
+          text: 'Nenhum modelo selecionado. Abra as configurações e sincronize um provedor.',
+        });
+        return;
+      }
 
-        const needsApproval = mode === 'assisted' && !approveAll;
-        if (needsApproval) {
-          setPendingApproval({
-            id: uid(),
-            tool: 'write_file',
-            target: 'src/main.py',
-            description: 'Adicionar método calculate_std_dev e rodar pytest tests/test_main.py.',
-          });
-          appendMessage({
-            role: 'agent',
-            text: 'Preciso da sua aprovação para editar `src/main.py` e executar os testes.',
-          });
-        } else {
-          appendMessage({ role: 'agent', text: 'Executando em modo autônomo...' });
-          applyRefactor();
-        }
-      }, 700);
+      void askAgent({ prompt: text, model: modelName, baseUrl: provider.baseUrl, kind: provider.kind })
+        .then((turn) => {
+          setBusy(false);
+          if (turn.toolCalls.length > 0) {
+            appendTerminal(line('system', `agente chamou: ${turn.toolCalls.join(', ')}`));
+            setDiffText(
+              [
+                'Ferramentas usadas nesta tarefa:',
+                ...turn.toolCalls.map((name) => `  ${name}`),
+              ].join('\n'),
+            );
+          }
+          appendMessage({ role: 'agent', text: turn.answer });
+        })
+        .catch((error: unknown) => {
+          setBusy(false);
+          appendMessage({ role: 'agent', text: `Falha ao executar o agente: ${String(error)}` });
+        });
     },
-    [appendMessage, applyRefactor, approveAll, mode],
+    [activeModel, activeProvider, appendMessage, appendTerminal],
   );
 
   const handleApprove = useCallback(() => {
     setPendingApproval(null);
-    appendMessage({ role: 'agent', text: 'Ação aprovada. Aplicando alteração...' });
-    applyRefactor();
-  }, [appendMessage, applyRefactor]);
+    appendMessage({
+      role: 'system',
+      text: 'Aprovação passo a passo ainda não está disponível: o agente executa a tarefa por inteiro.',
+    });
+  }, [appendMessage]);
 
   const handleReject = useCallback(() => {
     setPendingApproval(null);
