@@ -6,8 +6,12 @@
 //!
 //! The shell owns one **long-lived** core session — started lazily by
 //! `ShellState::with_core`, restarted if the process died — and exposes it to the
-//! webview through a small command surface: `shell_info`, `core_boot_probe`,
-//! `core_handshake` and `call_core_tool`.
+//! webview through a small command surface: `shell_info`, `workspace_info`,
+//! `core_boot_probe`, `core_handshake` and `call_core_tool`.
+//!
+//! Two roots are kept deliberately separate: `app_root` is where the bundle
+//! lives and the core is found, `workspace_root` is the project the core edits
+//! and becomes the child process's working directory.
 //!
 //! The layers are split so each can be tested without a window: process plumbing
 //! lives in `bridge`, the MCP protocol in `mcp`, and this file only wires them to
@@ -41,9 +45,15 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// State shared with the commands.
 struct ShellState {
-    /// The directory the shell treats as the project root. Resolved once at
-    /// startup, never taken from the webview: a webview cannot be trusted to
-    /// name a filesystem path.
+    /// Where the bundle lives: `dist/core.mjs` and `runtime/node` resolve from
+    /// here. Decided once at startup and never taken from the webview.
+    app_root: PathBuf,
+    /// The directory the core is pointed at — what the editor actually opens.
+    ///
+    /// Kept apart from `app_root` on purpose. The core reads its workspace from
+    /// its own working directory, so giving both the same value would pin the
+    /// editor to whatever directory the app happened to be launched from, with
+    /// no way to open a project.
     workspace_root: PathBuf,
     /// The single core session, started on first use and reused after that.
     ///
@@ -55,8 +65,9 @@ struct ShellState {
 }
 
 impl ShellState {
-    fn new(workspace_root: PathBuf) -> Self {
+    fn new(app_root: PathBuf, workspace_root: PathBuf) -> Self {
         Self {
+            app_root,
             workspace_root,
             core: Mutex::new(None),
         }
@@ -81,7 +92,7 @@ impl ShellState {
             // The protocol is stateless and the spec says the client SHOULD
             // restart a server that exited unexpectedly, so a dead core is
             // replaced rather than surfaced as an error.
-            *guard = Some(Self::start_core(&self.workspace_root)?);
+            *guard = Some(Self::start_core(&self.app_root, &self.workspace_root)?);
         }
 
         let session = guard
@@ -92,8 +103,12 @@ impl ShellState {
     }
 
     /// Spawn a core and complete the legacy handshake on it.
-    fn start_core(workspace_root: &Path) -> Result<CoreSession, String> {
-        let config = CoreConfig::for_workspace(workspace_root);
+    ///
+    /// The core binary is located through `app_root`, but the process runs with
+    /// `workspace_root` as its working directory — that is how the core decides
+    /// which project to serve.
+    fn start_core(app_root: &Path, workspace_root: &Path) -> Result<CoreSession, String> {
+        let config = CoreConfig::for_app_root(app_root);
         let child = spawn_core(&config, workspace_root).map_err(|error| error.to_string())?;
         let mut session = CoreSession::start(child).map_err(|error| error.to_string())?;
 
@@ -123,7 +138,7 @@ fn shell_info() -> String {
 /// from the real process rather than an assumption.
 #[tauri::command]
 fn core_boot_probe(state: tauri::State<'_, ShellState>) -> Result<String, String> {
-    let config = CoreConfig::for_workspace(&state.workspace_root);
+    let config = CoreConfig::for_app_root(&state.app_root);
     let mut child =
         spawn_core(&config, &state.workspace_root).map_err(|error| error.to_string())?;
 
@@ -174,17 +189,46 @@ fn call_core_tool(
     state.with_core(move |session| session.call_tool(&tool, arguments, TOOL_TIMEOUT))
 }
 
+/// The directory the core is editing.
+///
+/// The header used to show a hardcoded `workspace / my-python-project` label
+/// while the editor looked somewhere else entirely, so there was no way to tell
+/// a wrong workspace from an empty one. This reports the real path instead.
+#[tauri::command]
+fn workspace_info(state: tauri::State<'_, ShellState>) -> String {
+    state.workspace_root.display().to_string()
+}
+
 fn main() {
-    let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workspace_root = workspace_root_from_environment().unwrap_or_else(|| app_root.clone());
 
     tauri::Builder::default()
-        .manage(ShellState::new(workspace_root))
+        .manage(ShellState::new(app_root, workspace_root))
         .invoke_handler(tauri::generate_handler![
             shell_info,
+            workspace_info,
             core_boot_probe,
             core_handshake,
             call_core_tool
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the NexusAgent Studio shell");
+}
+
+/// The workspace the core should edit, from `NEXUS_WORKSPACE`.
+///
+/// An environment variable rather than an argument because `RUN.sh` is what
+/// sets it before the process starts; the webview is never asked, since it
+/// cannot be trusted to name a filesystem path. Falling back to the launch
+/// directory keeps development working, where the repository is both the app
+/// root and the project being edited.
+fn workspace_root_from_environment() -> Option<PathBuf> {
+    let value = std::env::var("NEXUS_WORKSPACE").ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
 }

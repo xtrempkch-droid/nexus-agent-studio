@@ -56,6 +56,17 @@ export function describeCore(): Promise<string> {
 }
 
 /**
+ * The directory the core is actually editing.
+ *
+ * Worth asking for rather than assuming: the header used to display a hardcoded
+ * label while the editor looked somewhere else, which makes a wrong workspace
+ * indistinguishable from an empty one.
+ */
+export function workspaceInfo(): Promise<string> {
+  return invokeShell<string>('workspace_info');
+}
+
+/**
  * Invoke a core tool through the shell.
  *
  * The resolved value is the tool result exactly as the core produced it —

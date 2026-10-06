@@ -133,9 +133,27 @@ jobs:
           cat > bundle/RUN.sh <<'RUN'
           #!/usr/bin/env bash
           set -euo pipefail
+
+          # The project the editor opens. Without an argument the core falls
+          # back to its working directory, which is the bundle itself, and the
+          # app opens empty in a way that is easy to mistake for a bug.
+          WORKSPACE="${1:-$PWD}"
+          if [[ ! -d "$WORKSPACE" ]]; then
+            echo "erro: '$WORKSPACE' nao e um diretorio" >&2
+            echo "uso: bash RUN.sh [diretorio-do-projeto]" >&2
+            exit 2
+          fi
+          WORKSPACE="$(readlink -f "$WORKSPACE")"
+
+          # The app root has to be this script's directory, because dist/core.mjs
+          # and runtime/node are resolved against the process working directory.
           cd "$(dirname "$(readlink -f "$0")")"
           chmod +x nexus-agent-studio-shell runtime/node
-          exec ./nexus-agent-studio-shell "$@"
+
+          echo "NexusAgent Studio"
+          echo "  app       : $PWD"
+          echo "  workspace : $WORKSPACE"
+          exec env NEXUS_WORKSPACE="$WORKSPACE" ./nexus-agent-studio-shell
           RUN
           chmod +x bundle/RUN.sh bundle/nexus-agent-studio-shell
 

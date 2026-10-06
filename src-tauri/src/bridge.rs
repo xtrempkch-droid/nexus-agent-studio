@@ -29,17 +29,21 @@ pub struct CoreConfig {
 }
 
 impl CoreConfig {
-    /// Config for a workspace root: `dist/core.mjs` inside that root, run by a
-    /// bundled runtime when the bundle ships one and by `node` from `PATH`
-    /// otherwise.
+    /// Config for the **application root**: the directory the bundle lives in,
+    /// which is where `dist/core.mjs` and `runtime/node` are.
     ///
-    /// A downloaded bundle is nothing more than a directory the user extracted,
-    /// and the shell is started from inside it, so `runtime/node` is a plain
-    /// relative lookup. Deliberately no `.exe` suffix probing: the bundle is
-    /// built per platform, and guessing an executable name from the host would
-    /// be a second, weaker copy of information the bundle already carries.
-    pub fn for_workspace(workspace_root: &Path) -> Self {
-        let bundled = workspace_root.join("runtime").join("node");
+    /// This is deliberately *not* the workspace. The two were one value until
+    /// the cost of that became visible: the core derives its workspace from its
+    /// own working directory, so conflating them meant the editor was pointed at
+    /// whatever directory the app happened to be launched from, with no way to
+    /// open an actual project. `spawn_core` takes the workspace separately.
+    ///
+    /// The bundled runtime is a plain relative lookup, with no `.exe` suffix
+    /// probing: the bundle is built per platform, and guessing an executable
+    /// name from the host would be a second, weaker copy of information the
+    /// bundle already carries.
+    pub fn for_app_root(app_root: &Path) -> Self {
+        let bundled = app_root.join("runtime").join("node");
         let runtime = if bundled.is_file() {
             bundled
         } else {
@@ -47,7 +51,7 @@ impl CoreConfig {
         };
         Self {
             runtime,
-            entry: workspace_root.join("dist").join("core.mjs"),
+            entry: app_root.join("dist").join("core.mjs"),
         }
     }
 }
@@ -132,10 +136,22 @@ mod tests {
     }
 
     #[test]
-    fn for_workspace_places_the_entry_under_dist() {
-        let built = CoreConfig::for_workspace(Path::new("/ws"));
+    fn for_app_root_places_the_entry_under_dist() {
+        let built = CoreConfig::for_app_root(Path::new("/ws"));
         assert_eq!(built.runtime, PathBuf::from("node"));
         assert_eq!(built.entry, PathBuf::from("/ws/dist/core.mjs"));
+    }
+
+    /// The regression test for the bug this whole split exists to fix: the
+    /// directory the app was launched from must not decide what gets edited.
+    #[test]
+    fn core_command_takes_the_core_from_the_app_root_but_runs_in_the_workspace() {
+        let config = CoreConfig::for_app_root(Path::new("/bundle"));
+        let command = core_command(&config, Path::new("/home/dev/project"));
+
+        assert_eq!(command.get_current_dir(), Some(Path::new("/home/dev/project")));
+        let args: Vec<&OsStr> = command.get_args().collect();
+        assert_eq!(args, vec![OsStr::new("/bundle/dist/core.mjs")]);
     }
 
     #[test]
@@ -285,14 +301,14 @@ mod tests {
     /// installed Node can still run the app. The path is relative to the
     /// workspace root on purpose: that is the directory the user runs from.
     #[test]
-    fn for_workspace_prefers_the_bundled_runtime_when_the_bundle_ships_one() {
+    fn for_app_root_prefers_the_bundled_runtime_when_the_bundle_ships_one() {
         let dir = std::env::temp_dir().join("nexus-agent-studio-bundled-runtime-test");
         let runtime = dir.join("runtime").join("node");
         std::fs::create_dir_all(runtime.parent().expect("runtime dir has a parent"))
             .expect("failed to create the temp dir");
         std::fs::write(&runtime, b"#!/bin/sh\n").expect("failed to write the fake runtime");
 
-        let config = CoreConfig::for_workspace(&dir);
+        let config = CoreConfig::for_app_root(&dir);
         assert_eq!(config.runtime, runtime);
         assert_eq!(config.entry, dir.join("dist").join("core.mjs"));
 
@@ -303,12 +319,12 @@ mod tests {
     /// development on a machine that happens to have a stray `runtime/node`
     /// would silently run the wrong Node.
     #[test]
-    fn for_workspace_falls_back_to_path_node_without_a_bundle() {
+    fn for_app_root_falls_back_to_path_node_without_a_bundle() {
         let dir = std::env::temp_dir().join("nexus-agent-studio-no-bundle-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("failed to create the temp dir");
 
-        let config = CoreConfig::for_workspace(&dir);
+        let config = CoreConfig::for_app_root(&dir);
         assert_eq!(config.runtime, PathBuf::from("node"));
 
         let _ = std::fs::remove_dir_all(&dir);

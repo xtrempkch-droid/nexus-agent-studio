@@ -5,20 +5,28 @@
  * and the agent chat panel, reproducing the `layout/` reference inside a real
  * React + Tailwind v4 build.
  *
- * NOTE ON WIRING: the core connection is **real**. `lib/shell.ts` reaches the
- * Tauri shell, and inside the packaged app the header badge reports what the
- * core actually negotiated rather than a hardcoded label; in a plain browser it
- * keeps saying "Simulação", because nothing was injected and pretending
- * otherwise would be a lie. The agent handlers further down are still a
- * deterministic simulation — moving them onto `callCoreTool` is the next step,
- * and until then this screen is part simulation on purpose.
+ * NOTE ON WIRING: the two halves are in different states on purpose.
+ *
+ * The **filesystem** half is real. Inside the packaged app the explorer, the
+ * editor and the interactive shell all reach the core through
+ * `lib/coreClient.ts`, so what you see is the actual contents of the workspace
+ * the app was pointed at — including the header, which reports the resolved path
+ * instead of a placeholder. In a plain browser nothing was injected, so the
+ * preview files below are shown instead; that is a design preview, not a broken
+ * app.
+ *
+ * The **agent** half is still a deterministic simulation. There is no model
+ * behind it: the chat replays a fixed script and the refactor it performs is
+ * string substitution on the file it already had. Making that real needs an
+ * actual LLM, which is its own slice — see `docs/PROJECT_STATE.md`.
  *
  * @module variants/desktop/src/App
  */
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { InlineHint } from './lib/coreTypes.ts';
-import { describeCore, isShellAvailable } from './lib/shell.ts';
+import { describeCore, isShellAvailable, workspaceInfo } from './lib/shell.ts';
+import { listDirectory, readFile, runInSandbox, writeFile } from './lib/coreClient.ts';
 import { AgentChat, type ChatMessage, type PendingApproval } from './components/AgentChat.tsx';
 import {
   FileExplorer,
@@ -44,7 +52,12 @@ const MODELS: readonly ModelOption[] = [
   { id: 'llama3.1:8b', label: 'Llama 3.1 8B Instruct' },
 ];
 
-const INITIAL_FILES: readonly FileRecord[] = [
+/**
+ * Files shown when there is no core to ask — a plain browser running
+ * `npm run dev:desktop`. They preview the layout and are not a workspace the app
+ * can edit; the explorer only falls back to these outside the packaged app.
+ */
+const PREVIEW_FILES: readonly FileRecord[] = [
   {
     path: 'src/main.py',
     status: 'normal',
@@ -109,6 +122,36 @@ const INITIAL_FILES: readonly FileRecord[] = [
   },
 ];
 
+/**
+ * Guess a language id from a path, used only to pick the explorer's icon.
+ *
+ * A short table rather than a dependency on purpose: a wrong guess costs a wrong
+ * glyph, not a wrong edit.
+ */
+function languageForPath(path: string): string {
+  const dot = path.lastIndexOf('.');
+  const extension = dot === -1 ? '' : path.slice(dot + 1).toLowerCase();
+
+  switch (extension) {
+    case 'ts':
+    case 'tsx':
+      return 'typescript';
+    case 'js':
+    case 'jsx':
+    case 'mjs':
+    case 'cjs':
+      return 'javascript';
+    case 'py':
+      return 'python';
+    case 'md':
+      return 'markdown';
+    case 'rs':
+      return 'rust';
+    default:
+      return 'text';
+  }
+}
+
 function uid(): string {
   return globalThis.crypto.randomUUID();
 }
@@ -123,7 +166,7 @@ function line(stream: TerminalLine['stream'], text: string): TerminalLine {
  * Root component of the desktop variant.
  */
 export default function App() {
-  const [files, setFiles] = useState<readonly FileRecord[]>(INITIAL_FILES);
+  const [files, setFiles] = useState<readonly FileRecord[]>(PREVIEW_FILES);
   const [activeFile, setActiveFile] = useState<string>('src/main.py');
   const [openTabs, setOpenTabs] = useState<readonly string[]>(['src/main.py']);
 
@@ -136,8 +179,9 @@ export default function App() {
       id: 'welcome',
       role: 'agent',
       text:
-        'Sou seu assistente local. Posso refatorar código, criar arquivos e executar ' +
-        'comandos no terminal isolado. Use o modo Assistido para aprovar cada ação.',
+        'Assistente em simulação: não há modelo conectado a esta janela, então o que eu ' +
+        'responder é roteiro fixo, não raciocínio. O explorador, o editor e o shell falam ' +
+        'com o core de verdade; o chat é a parte que falta.',
     },
   ]);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
@@ -145,7 +189,6 @@ export default function App() {
 
   const [terminalLines, setTerminalLines] = useState<readonly TerminalLine[]>([]);
   const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus>('idle');
-  const [lastRun, setLastRun] = useState<{ image: string; containerId: string; exitCode: number } | null>(null);
 
   const [hints, setHints] = useState<readonly InlineHint[]>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>('agent');
@@ -158,6 +201,7 @@ export default function App() {
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
   const [connectionLabel, setConnectionLabel] = useState('Simulação');
   const [connectionDotClass, setConnectionDotClass] = useState('bg-amber-400');
+  const [workspaceLabel, setWorkspaceLabel] = useState('sem workspace');
 
   const currentFile = useMemo(
     () => files.find((file) => file.path === activeFile) ?? null,
@@ -168,6 +212,19 @@ export default function App() {
     () => MODELS.find((option) => option.id === model)?.label ?? model,
     [model],
   );
+
+  /**
+   * Short name of the workspace, for the explorer's tree root.
+   *
+   * The header carries the full path; the tree only has room for the leaf, and
+   * showing a hardcoded name there made it impossible to tell which project was
+   * open without reading the header.
+   */
+  const workspaceName = useMemo(() => {
+    const trimmed = workspaceLabel.replace(/\/+$/u, '');
+    const slash = trimmed.lastIndexOf('/');
+    return (slash === -1 ? trimmed : trimmed.slice(slash + 1)).toUpperCase();
+  }, [workspaceLabel]);
 
   const appendTerminal = useCallback((...entries: TerminalLine[]) => {
     setTerminalLines((previous) => [...previous, ...entries]);
@@ -183,10 +240,54 @@ export default function App() {
     );
   }, []);
 
-  const selectFile = useCallback((path: string) => {
-    setActiveFile(path);
-    setOpenTabs((previous) => (previous.includes(path) ? previous : [...previous, path]));
-  }, []);
+  /**
+   * Focus a file, reading it from the core the first time it is opened.
+   *
+   * Outside the shell the preview content is already in memory, so there is
+   * nothing to fetch and nothing that can fail.
+   */
+  const selectFile = useCallback(
+    (path: string) => {
+      setActiveFile(path);
+      setOpenTabs((previous) => (previous.includes(path) ? previous : [...previous, path]));
+
+      if (!isShellAvailable()) {
+        return;
+      }
+
+      void readFile(path)
+        .then((contents) => updateFile(path, contents.content, 'normal'))
+        .catch((error: unknown) => {
+          appendTerminal(line('stderr', `Falha ao ler ${path}: ${String(error)}`));
+        });
+    },
+    [appendTerminal, updateFile],
+  );
+
+  /**
+   * Write the open file back through the core.
+   *
+   * Manual rather than on every keystroke: the core records each write in the
+   * execution log as an AI-authored change, so saving per character would bury
+   * the real edits in noise.
+   */
+  const saveActiveFile = useCallback(() => {
+    const target = files.find((file) => file.path === activeFile);
+    if (target === undefined || !isShellAvailable()) {
+      return;
+    }
+
+    void writeFile(target.path, target.content)
+      .then((outcome) => {
+        updateFile(target.path, target.content, 'normal');
+        appendTerminal(
+          line('system', `WRITE: ${outcome.path} salvo (${String(outcome.bytesWritten)} bytes)`),
+        );
+      })
+      .catch((error: unknown) => {
+        appendTerminal(line('stderr', `Falha ao salvar ${target.path}: ${String(error)}`));
+      });
+  }, [activeFile, appendTerminal, files, updateFile]);
 
   // Connect to the real core when running inside the desktop shell.
   //
@@ -201,44 +302,108 @@ export default function App() {
 
     let cancelled = false;
 
-    describeCore()
-      .then((description) => {
-        if (cancelled) {
-          return;
-        }
-        setConnectionLabel('Core conectado');
-        setConnectionDotClass('bg-emerald-400');
-        appendTerminal(line('system', `Core: ${description}`));
-      })
-      .catch((error: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        setConnectionLabel('Core indisponível');
-        setConnectionDotClass('bg-red-500');
-        appendTerminal(line('stderr', `Falha ao falar com o core: ${String(error)}`));
-      });
+    const connect = async (): Promise<void> => {
+      const description = await describeCore();
+      if (cancelled) {
+        return;
+      }
+      setConnectionLabel('Core conectado');
+      setConnectionDotClass('bg-emerald-400');
+      appendTerminal(line('system', `Core: ${description}`));
+
+      const workspace = await workspaceInfo();
+      if (cancelled) {
+        return;
+      }
+      setWorkspaceLabel(workspace);
+
+      const listing = await listDirectory('.', 4);
+      if (cancelled) {
+        return;
+      }
+
+      const opened = listing.entries.filter((entry) => entry.type === 'file');
+      setFiles(
+        opened.map((entry) => ({
+          path: entry.path,
+          status: 'normal' as const,
+          language: languageForPath(entry.path),
+          content: '',
+        })),
+      );
+      appendTerminal(
+        line(
+          'system',
+          `Workspace: ${workspace} — ${String(opened.length)} arquivo(s)${
+            listing.truncated ? ' (listagem truncada)' : ''
+          }`,
+        ),
+      );
+
+      const first = opened[0];
+      if (first === undefined) {
+        setActiveFile('');
+        setOpenTabs([]);
+        return;
+      }
+
+      setActiveFile(first.path);
+      setOpenTabs([first.path]);
+      const contents = await readFile(first.path);
+      if (!cancelled) {
+        updateFile(first.path, contents.content, 'normal');
+      }
+    };
+
+    void connect().catch((error: unknown) => {
+      if (cancelled) {
+        return;
+      }
+      setConnectionLabel('Core indisponível');
+      setConnectionDotClass('bg-red-500');
+      appendTerminal(line('stderr', `Falha ao falar com o core: ${String(error)}`));
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [appendTerminal]);
+  }, [appendTerminal, updateFile]);
 
+  /**
+   * Run the tests in the core's sandbox.
+   *
+   * This used to print a green "1 passed in 0.08s" unconditionally, which was
+   * the most convincing lie in the app: it looked like evidence and was a
+   * constant. What is shown now is whatever the sandbox returned, including its
+   * refusal to run at all.
+   */
   const runPytest = useCallback(() => {
+    if (!isShellAvailable()) {
+      appendTerminal(line('system', 'Pré-visualização: sem sandbox para executar testes.'));
+      return;
+    }
+
     setSandboxStatus('executing');
     appendTerminal(line('system', 'Executando em ambiente isolado...'));
-    appendTerminal(line('stdout', '\u001b[33m$ pytest tests/test_main.py\u001b[0m'));
 
-    globalThis.setTimeout(() => {
-      appendTerminal(
-        line('stdout', '\u001b[32mtest_main.py::TestDataProcessor::test_calculate_stats PASSED\u001b[0m [100%]'),
-      );
-      appendTerminal(line('stdout', '\u001b[1m\u001b[32m✓ 1 passed in 0.08s\u001b[0m'));
-      setLastRun({ image: 'python:3.12-slim', containerId: 'nexus-a41f9c22', exitCode: 0 });
-      setSandboxStatus('success');
-      appendMessage({ role: 'agent', text: '✓ Refatoração concluída e testes validados no terminal.' });
-    }, 900);
-  }, [appendMessage, appendTerminal]);
+    void runInSandbox('pytest -q')
+      .then((run) => {
+        if (run.stdout.trimEnd() !== '') {
+          appendTerminal(line('stdout', run.stdout.trimEnd()));
+        }
+        if (run.stderr.trimEnd() !== '') {
+          appendTerminal(line('stderr', run.stderr.trimEnd()));
+        }
+        appendTerminal(
+          line('system', run.timedOut ? 'tempo esgotado' : `saída ${String(run.exitCode)}`),
+        );
+        setSandboxStatus(run.exitCode === 0 ? 'success' : 'error');
+      })
+      .catch((error: unknown) => {
+        appendTerminal(line('stderr', String(error)));
+        setSandboxStatus('error');
+      });
+  }, [appendTerminal]);
 
   const applyRefactor = useCallback(() => {
     const target = files.find((file) => file.path === 'src/main.py');
@@ -327,8 +492,37 @@ export default function App() {
       if (command === '') {
         return;
       }
-      setShellLines((previous) => [...previous, `$ ${command}`, 'Comando executado no ambiente local.']);
+
       setShellDraft('');
+      setShellLines((previous) => [...previous, `$ ${command}`]);
+
+      if (!isShellAvailable()) {
+        setShellLines((previous) => [
+          ...previous,
+          'Pré-visualização: sem o app empacotado não há sandbox para executar.',
+        ]);
+        return;
+      }
+
+      const appendOutput = (text: string): void => {
+        const trimmed = text.trimEnd();
+        if (trimmed !== '') {
+          setShellLines((previous) => [...previous, ...trimmed.split('\n')]);
+        }
+      };
+
+      setSandboxStatus('executing');
+      void runInSandbox(command)
+        .then((run) => {
+          appendOutput(run.stdout);
+          appendOutput(run.stderr);
+          appendOutput(run.timedOut ? '(tempo esgotado)' : `(saída ${String(run.exitCode)})`);
+          setSandboxStatus(run.exitCode === 0 ? 'success' : 'error');
+        })
+        .catch((error: unknown) => {
+          appendOutput(String(error));
+          setSandboxStatus('error');
+        });
     },
     [shellDraft],
   );
@@ -354,7 +548,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-ide-bg text-slate-200">
       <HeaderBar
-        workspaceLabel="workspace / my-python-project"
+        workspaceLabel={workspaceLabel}
         models={MODELS}
         selectedModel={model}
         onModelChange={setModel}
@@ -370,7 +564,7 @@ export default function App() {
           files={files}
           activeFile={activeFile}
           hints={hints}
-          rootLabel="MY-PYTHON-PROJECT"
+          rootLabel={workspaceName}
           onSelect={selectFile}
           onNewFile={() =>
             appendMessage({ role: 'system', text: 'Criação de arquivo disponível no app empacotado.' })
@@ -399,9 +593,13 @@ export default function App() {
           <div className="relative min-h-0 flex-1 bg-slate-950/80">
             <textarea
               value={currentFile?.content ?? ''}
-              onChange={(event) =>
-                updateFile(activeFile, event.target.value, currentFile?.status ?? 'normal')
-              }
+              onChange={(event) => updateFile(activeFile, event.target.value, 'modified')}
+              onKeyDown={(event) => {
+                if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+                  event.preventDefault();
+                  saveActiveFile();
+                }
+              }}
               spellCheck={false}
               className="scrollbar-ide h-full w-full resize-none bg-transparent p-4 font-mono text-[13px] leading-relaxed text-slate-200 focus:outline-none"
               aria-label={`Editor: ${activeFile}`}
@@ -438,13 +636,6 @@ export default function App() {
                 <TerminalOutput
                   lines={terminalLines}
                   status={sandboxStatus}
-                  {...(lastRun === null
-                    ? {}
-                    : {
-                        image: lastRun.image,
-                        containerId: lastRun.containerId,
-                        exitCode: lastRun.exitCode,
-                      })}
                   onClear={() => setTerminalLines([])}
                 />
               )}
