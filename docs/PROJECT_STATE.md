@@ -92,6 +92,7 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 | 19 | O terminal não executava nada | 🟡 **DESTRAVADO, DESLIGADO POR PADRÃO.** O sandbox Docker continua sendo o padrão e **nada o infere**: sem Docker o terminal só sabia explicar a própria recusa — e um sandbox que não roda não é mais seguro, é só quebrado. Criado `common/docker/localRunner.ts` (`LocalRunner`) implementando o **mesmo contrato** `run()` do `DockerSandbox`; o tipo `Sandbox` virou `Pick<DockerSandbox, 'run'>`, então os tools não sabem qual receberam. Ligado apenas por `NEXUS_UNSANDBOXED=1`, lido em `common/index.ts` — **nunca do webview**, que não pode desligar isolamento — e o `RUN.sh` imprime um aviso explícito. **O rótulo é a história de segurança:** todo resultado reporta `image: 'local (sem isolamento)'` e **nunca** a imagem pedida, porque nada rodou nela; um log que não distingue contêiner de host é pior que log nenhum. `shellArgv` é parametrizado por plataforma para o ramo Windows ser testável a partir do Linux. Testes: `localRunner.test.ts` (7 casos, executor injetado, nenhum processo real) e `core.test.ts` (4 casos, incluindo "sandbox por padrão" e "injeção vence a flag"). |
 | 20 | Não dava para abrir pastas | ✅ **CORRIGIDO.** O explorador era uma lista plana **só de arquivos**: `list_directory` devolvia pastas e arquivos, mas a UI descartava os diretórios — abrir uma pasta era impossível, e não havia ação de "abrir arquivo". Agora o explorador lista arquivos **e** subdiretórios da pasta atual, clicar numa pasta entra nela, e há breadcrumb + `..` para subir, com a raiz sempre acessível. Abrir um arquivo insere o registro na lista de abertos **antes** de lê-lo — o explorador lista uma pasta por vez, então o editor não tinha onde pôr conteúdo que ainda não tinha visto. `FileExplorer` trocou o modelo de `files` por `entries` + `statuses` + `currentDir`. |
 | 21 | Configurações duras no Ollama | ✅ **CORRIGIDO.** O modal tinha um único campo de URL do Ollama e o seletor de modelo era uma lista **falsa** de nomes fixos. Agora: **lista de provedores** (nome, tipo `ollama`/`openai` e URL), botão **Sincronizar modelos** que pergunta ao provedor ativo via a nova tool `list_models` e lista os nomes para o usuário escolher o ativo; o seletor do cabeçalho é construído dos modelos sincronizados. **Formato verificado contra o servidor vivo** (`/api/tags` → `{models:[{name}]}`; `/v1/models` → `{object:list,data:[{id}]}`), não assumido; a tool nasceu com `fetch` injetável e testes. **Consequência que quebrou o CI:** a superfície subiu de 5 para 6 tools, e a lista é afirmada em **três lugares** — smoke test TS, composição do core e teste e2e do Rust; atualizei dois e esqueci o terceiro. Lição: antes de adicionar tool, `grep` por todas as listas exatas. |
+| 24 | O PR #7 foi mergeado **sem os dois últimos commits** (correção do travamento e botão Salvar) | 🟡 **PENDENTE DE CI.** `7d5f2f6` mergeou só `651de18` + `dc6253d`; `471b1fc` (`async` + `spawn_blocking`, botão Salvar) e `b98ea32` (docs) ficaram para trás no branch. E **depois do merge nenhum workflow roda nesse branch**: `build.yml` dispara em `push` para `main` ou `pull_request`, e sem PR aberto não há evento — foi por isso que o CI "parou" de atualizar. Os dois commits foram levados para o branch novo **`fix/main-thread-freeze`**; abrir o PR é o que faz o CI julgar o Rust, que **não compila localmente** (falta `libdbus-1-dev`/GTK de sistema e `sudo` pede senha). **Enquanto isso não for mergeado, o `.exe` continua travando** — o binário precisa ser reconstruído depois do merge. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -327,16 +328,40 @@ node dist/core.mjs      # core como MCP server stdio
     faça I/O bloqueante (stdio do core, espera de diálogo, shutdown) tem de ser
     `async` + `spawn_blocking`; comando síncrono é só para trabalho instantâneo.
 
+17. ✅ **`get_editor_context` alimentado pela UI.** A tool existia desde a fase 2,
+    mas reportava sempre o estado vazio porque nada escrevia no store: a UI nunca
+    enviava cursor/seleção ao core (mesma classe de lacuna que o LSP tinha). Agora
+    o par está completo — `set_editor_context` (a UI conta o que está na tela) e
+    `get_editor_context` (o agente pergunta). A surface foi de **10 → 11 tools**;
+    as três listas que a asseguram (`common/core.test.ts`, `scripts/smoke-mcp.ts`,
+    o e2e em `src-tauri/src/mcp.rs`) foram atualizadas junto.
+    - **Core** (`common/mcp/tools/editorTools.ts`): patch **parcial** — campo omitido
+      mantém o valor anterior; `null` explícito é um valor (é assim que a seleção é
+      limpa); `languageId` é **derivado** de `activeFile` no core quando omitido,
+      porque o mapa de extensões mora num lugar só (`common/lsp/languageService.ts`)
+      e a UI só pode importar *tipos* do core. Fechar o arquivo limpa o `languageId`.
+    - **UI** (`variants/desktop/src/App.tsx`, `lib/coreClient.ts`): o editor reporta
+      com **debounce de 400 ms** — o caret muda a cada tecla, o valor só precisa ser
+      o último. O caret vive num **ref**, não em estado, para não re-renderizar a
+      cada tecla; `onSelect`/`onClick`/`onKeyUp`/`onChange` capturam posição e
+      seleção (offset → linha/coluna 1-based). Abrir outro arquivo zera o caret (a
+      posição do arquivo anterior não existe no novo), o relatório é reenviado
+      quando o handshake completa, e falha é silenciosa — no browser não há core.
+    **Verificado:** 214 testes (eram 204; +10 em `editorTools.test.ts`), o smoke com
+    o **round-trip `set_editor_context` → `get_editor_context`** sobre stdio real, e
+    no browser com um `window.__TAURI__` **stubado** registrando as chamadas:
+    relatório ao conectar, seleção (`{start,end}` + cursor), debounce (N teclas → 1
+    envio) e `dirty: true` ao editar.
+
 ---
 
 **Ao retomar.** Todo o **LSP bridge** (§5 item 14) está implementado e mergeado:
 cliente, orquestração, tools MCP (`get_diagnostics`, `configure_language_server`,
-`list_language_servers`) e fiação na UI. O que resta é **melhoria** — conciliada
+`list_language_servers`) e fiação na UI. O `get_editor_context` também deixou de ser
+placeholder (§5 item 17). O que resta é **melhoria** — conciliada
 com o `docs/roadmap.md` ("Next"): (1) fila de requisições no sidecar em vez do
 mutex bloqueante (§5 item 6-a); (2) era moderna da spec 2026-07-28 (§5 item 6-d);
-(3) WASM target para `common/` (exige auditoria DOM-free); (4) **alimentar o
-`get_editor_context`** (a UI ainda não envia cursor/seleção ao core, então essa
-tool reporta o estado vazio — mesma classe de lacuna que o LSP tinha). Itens de
+(3) WASM target para `common/` (exige auditoria DOM-free). Itens de
 roadmap ainda não priorizados: plugin marketplace com assinatura, MCP remoto via
 Streamable HTTP, integração DAP. Para retomar comigo, ler §3 linhas 16–23
 (histórico recente) e `/memories/repo/build-and-verify.md` (armadilhas já pagas).
