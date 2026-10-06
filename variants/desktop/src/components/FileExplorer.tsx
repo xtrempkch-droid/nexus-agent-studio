@@ -33,6 +33,8 @@ export interface FileExplorerProps {
   readonly onNavigateUp: () => void;
   readonly onNewFile: () => void;
   readonly onRefresh: () => void;
+  /** Open the native folder picker to choose another project. */
+  readonly onOpenWorkspace: () => void;
 }
 
 /** Parent directory of a workspace-relative path; `.` at the root. */
@@ -107,6 +109,7 @@ export function FileExplorer({
   onNavigateUp,
   onNewFile,
   onRefresh,
+  onOpenWorkspace,
 }: FileExplorerProps) {
   const errorCounts = new Map<string, number>();
   const warningCounts = new Map<string, number>();
@@ -124,6 +127,14 @@ export function FileExplorer({
           Projetos
         </span>
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onOpenWorkspace}
+            title="Abrir projeto"
+            className="rounded p-1 transition-colors hover:text-slate-200"
+          >
+            <Icon name="folder-open" className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onClick={onNewFile}

@@ -230,16 +230,31 @@ node dist/core.mjs      # core como MCP server stdio
     módulos Rust (`mcp.rs`/`bridge.rs`, livres de Tauri) compilam e testam em
     isolamento (`cargo check`/`cargo test`); o `cargo check` completo do `main.rs`
     fica para o CI (exige as libs de sistema do Tauri).
+11. ✅ **Escolha de projeto/pasta em runtime.** O workspace era fixado no start
+    (via `NEXUS_WORKSPACE`/diretório de lançamento) e não havia como trocar de
+    projeto com o app aberto. Agora `workspace_root` virou `Mutex<PathBuf>` no
+    `ShellState` e dois comandos o alteram: `pick_workspace` abre o diálogo
+    nativo de pasta (`tauri-plugin-dialog`, chamado **do Rust** — sem dependência
+    npm, não toca o lockfile) e `set_workspace` aceita um caminho digitado; ambos
+    passam por `switch_workspace`, que canoniza o caminho, valida que é diretório,
+    derruba o core atual e deixa o próximo uso reiniciá-lo lazy no novo diretório.
+    Na UI há botão **"Abrir projeto"** no cabeçalho e no explorador, e um campo
+    **"Pasta do projeto"** nas configurações. Ao trocar, a UI reseta arquivos,
+    abas, explorer, diagnósticos e terminais (o histórico do chat é mantido — é da
+    sessão, não do projeto). `workspace_info` passou a devolver `Result` e ler do
+    mutex. **Verificado:** lint/typecheck/test/build:desktop verdes + teste no
+    navegador; o `cargo check` completo do `main.rs` (inclui o plugin de diálogo)
+    fica para o CI, que já instala as libs GTK necessárias.
 
 ---
 
-**Ao retomar.** O streaming da resposta do agente foi implementado (§5 item 10) —
-o que resta é **melhoria**, em ordem de valor: (1) modelo maior no Ollama para
-qualidade/velocidade — escolha do dono, não conserto; (2) suportar `.gitignore` no
-`list_directory` (hoje é uma lista fixa); (3) era moderna da spec (§5 item 6-d);
-(4) fila de requisições no sidecar em vez do mutex bloqueante (§5 item 6-a). Para
-retomar comigo, ler §3 linhas 16–23 (histórico recente) e
-`/memories/repo/build-and-verify.md` (armadilhas já pagas).
+**Ao retomar.** O streaming da resposta do agente (§5 item 10) e a **escolha de
+projeto/pasta** (§5 item 11) foram implementados — o que resta é **melhoria**, em
+ordem de valor: (1) modelo maior no Ollama para qualidade/velocidade — escolha do
+dono, não conserto; (2) suportar `.gitignore` no `list_directory` (hoje é uma lista
+fixa); (3) era moderna da spec (§5 item 6-d); (4) fila de requisições no sidecar
+em vez do mutex bloqueante (§5 item 6-a). Para retomar comigo, ler §3 linhas 16–23
+(histórico recente) e `/memories/repo/build-and-verify.md` (armadilhas já pagas).
 
 ## 6. Decisões e correções em relação ao prompt original
 

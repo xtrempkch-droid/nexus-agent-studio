@@ -91,6 +91,26 @@ export function callCoreTool<T = unknown>(tool: string, args: object = {}): Prom
 }
 
 /**
+ * Open the native folder picker and switch the editor to the chosen project.
+ *
+ * Resolves to the new (canonicalised) workspace path, or `null` when the user
+ * cancelled the dialog. The shell opens the dialog and switches the core itself,
+ * so the webview never invents a filesystem path.
+ */
+export function pickWorkspace(): Promise<string | null> {
+  return invokeShell<string | null>('pick_workspace');
+}
+
+/**
+ * Point the editor at an explicit workspace directory (the text-input fallback
+ * to the native picker). Resolves to the canonicalised path, or rejects when the
+ * path is not a real directory.
+ */
+export function setWorkspace(path: string): Promise<string> {
+  return invokeShell<string>('set_workspace', { path });
+}
+
+/**
  * Subscribe to agent progress events streamed from the core.
  *
  * The core emits `notifications/agent/stream` while `ask_agent` runs; the shell

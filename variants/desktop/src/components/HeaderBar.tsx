@@ -29,6 +29,8 @@ export interface HeaderBarProps {
   /** Tailwind classes for the connection status dot. */
   readonly connectionDotClass: string;
   readonly onOpenSettings: () => void;
+  /** Open the native folder picker to choose another project. */
+  readonly onOpenWorkspace: () => void;
 }
 
 const MODE_BASE =
@@ -47,6 +49,7 @@ export function HeaderBar({
   connectionLabel,
   connectionDotClass,
   onOpenSettings,
+  onOpenWorkspace,
 }: HeaderBarProps) {
   return (
     <header className="z-20 flex h-12 shrink-0 items-center justify-between border-b border-slate-800/80 bg-ide-sidebar px-4 text-xs">
@@ -65,10 +68,23 @@ export function HeaderBar({
 
         <span className="text-slate-700">|</span>
 
-        <div className="flex items-center gap-2 rounded border border-slate-800 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400">
-          <Icon name="folder-git" className="h-3.5 w-3.5 text-indigo-400" />
-          <span className="text-slate-300">{workspaceLabel}</span>
+        <div
+          className="flex max-w-[360px] items-center gap-2 rounded border border-slate-800 bg-slate-900/80 px-2.5 py-1 font-mono text-[11px] text-slate-400"
+          title={workspaceLabel}
+        >
+          <Icon name="folder-git" className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
+          <span className="truncate text-slate-300">{workspaceLabel}</span>
         </div>
+
+        <button
+          type="button"
+          onClick={onOpenWorkspace}
+          title="Abrir projeto"
+          className="flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900/80 px-2 py-1 font-mono text-[11px] text-slate-300 transition-colors hover:border-indigo-500/50 hover:text-indigo-300"
+        >
+          <Icon name="folder-open" className="h-3.5 w-3.5" />
+          <span>Abrir</span>
+        </button>
       </div>
 
       <div className="flex items-center gap-3">
