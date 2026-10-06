@@ -20,3 +20,7 @@ tauri-build = { version = "2", features = [] }
 # Keeping the crate graph small keeps `cargo check` fast and keeps the surface I
 # have to verify small too.
 tauri = { version = "2", features = [] }
+
+# Needed to frame and read the MCP messages. Only `Value` and the `json!` macro
+# are used, so `serde` with `derive` is not required on top of this.
+serde_json = "1"

@@ -96,22 +96,45 @@ jobs:
           fi
           exit "$status"
 
-      # The bridge module is Tauri-free on purpose so its tests run here, with no
-      # display and no window. This is what makes the sidecar plumbing verifiable
-      # in CI rather than only on a developer machine.
+      # The end-to-end handshake test spawns the *real* core, so the bundle has to
+      # exist before cargo runs. The step above only produced the UI.
+      - name: Build core
+        run: npm run build
+
+      # The bridge and mcp modules are Tauri-free on purpose so their tests run
+      # here, with no display and no window. This is what makes the sidecar
+      # verifiable in CI rather than only on a developer machine.
+      #
+      # `--include-ignored` runs the end-to-end handshake test. It is marked
+      # ignored because it needs a built core and Node on PATH, and a test that
+      # silently passes when its subject is absent would be worse than none.
+      # `--nocapture` lets it emit a ::notice:: line, which becomes a check-run
+      # annotation — the only way to read what the core actually negotiated
+      # without downloading the raw job log, which needs authentication.
       - name: cargo test
         shell: bash
+        env:
+          NEXUS_CORE_WORKSPACE: ${{ github.workspace }}
         run: |
           set +e
           cargo test --manifest-path src-tauri/Cargo.toml \
-            --message-format=short 2>&1 | tee cargo-test.log
+            --message-format=short -- --include-ignored --nocapture 2>&1 | tee cargo-test.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             grep -E ': error' cargo-test.log | head -10 | while IFS= read -r line; do
               printf '::error::%s\n' "$line"
             done
+            grep -E 'panicked at' cargo-test.log | head -5 | while IFS= read -r line; do
+              printf '::error::%s\n' "$line"
+            done
             grep -E '^test .* FAILED' cargo-test.log | head -10 | while IFS= read -r line; do
               printf '::error::%s\n' "$line"
+            done
+            # The core logs to stderr, and a failed handshake test prints those
+            # lines as part of its panic payload. Surfacing them as annotations is
+            # what turns "the handshake failed" into "the core said this".
+            grep -E '^\[nexus\]' cargo-test.log | head -10 | while IFS= read -r line; do
+              printf '::warning::core stderr: %s\n' "$line"
             done
           fi
           exit "$status"

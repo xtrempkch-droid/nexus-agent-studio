@@ -14,14 +14,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bridge;
+mod mcp;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use bridge::{spawn_core, wait_for_boot, CoreConfig};
+use mcp::{CoreSession, SessionError};
+use serde_json::Value;
 
 /// How long the shell waits for the core to announce itself.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long each step of the MCP handshake may take.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// State shared with the commands.
 struct ShellState {
@@ -61,12 +67,55 @@ fn core_boot_probe(state: tauri::State<'_, ShellState>) -> Result<String, String
     read.map_err(|error| format!("{error:?}"))
 }
 
+/// Run the legacy MCP handshake against a freshly started core and describe it.
+///
+/// This is the first command that actually *talks* to the core rather than only
+/// checking that it starts. It spawns a core per call, which is honest for a
+/// probe and deliberately not the final shape: a long-lived session, and the
+/// modern protocol era, belong to a later slice.
+#[tauri::command]
+fn core_handshake(state: tauri::State<'_, ShellState>) -> Result<String, String> {
+    let config = CoreConfig::for_workspace(&state.workspace_root);
+    let child = spawn_core(&config, &state.workspace_root).map_err(|error| error.to_string())?;
+    let mut session = CoreSession::start(child).map_err(|error| error.to_string())?;
+
+    let described = describe_core(&mut session);
+
+    // Reap unconditionally, so a failed handshake cannot leave a core running.
+    let _ = session.shutdown(Duration::from_secs(5));
+
+    described.map_err(|error| error.to_string())
+}
+
+/// Handshake, list the tools, and render a one-line description.
+fn describe_core(session: &mut CoreSession) -> Result<String, SessionError> {
+    let initialized = session.initialize(HANDSHAKE_TIMEOUT)?;
+    let tools = session.list_tools(HANDSHAKE_TIMEOUT)?;
+
+    let name = initialized
+        .get("serverInfo")
+        .and_then(|info| info.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("<unnamed>");
+    let version = session.negotiated_version().unwrap_or("<absent>");
+
+    Ok(format!(
+        "{name} (protocol {version}) exposes {} tool(s): {}",
+        tools.len(),
+        tools.join(", ")
+    ))
+}
+
 fn main() {
     let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     tauri::Builder::default()
         .manage(ShellState { workspace_root })
-        .invoke_handler(tauri::generate_handler![shell_info, core_boot_probe])
+        .invoke_handler(tauri::generate_handler![
+            shell_info,
+            core_boot_probe,
+            core_handshake
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run the NexusAgent Studio shell");
 }
