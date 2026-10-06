@@ -31,6 +31,8 @@ export interface HeaderBarProps {
   readonly onOpenSettings: () => void;
   /** Open the native folder picker to choose another project. */
   readonly onOpenWorkspace: () => void;
+  /** Refresh and show diagnostics for the active file. */
+  readonly onCheckDiagnostics: () => void;
 }
 
 const MODE_BASE =
@@ -50,6 +52,7 @@ export function HeaderBar({
   connectionDotClass,
   onOpenSettings,
   onOpenWorkspace,
+  onCheckDiagnostics,
 }: HeaderBarProps) {
   return (
     <header className="z-20 flex h-12 shrink-0 items-center justify-between border-b border-slate-800/80 bg-ide-sidebar px-4 text-xs">
@@ -84,6 +87,16 @@ export function HeaderBar({
         >
           <Icon name="folder-open" className="h-3.5 w-3.5" />
           <span>Abrir</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onCheckDiagnostics}
+          title="Verificar diagnósticos do arquivo ativo"
+          className="flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900/80 px-2 py-1 font-mono text-[11px] text-slate-300 transition-colors hover:border-indigo-500/50 hover:text-indigo-300"
+        >
+          <Icon name="file-check" className="h-3.5 w-3.5" />
+          <span>Verificar</span>
         </button>
       </div>
 

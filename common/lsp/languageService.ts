@@ -17,7 +17,7 @@
 import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { InlineHintManager } from '../debug/hints.ts';
-import { toInlineHints, type LspPosition } from './diagnostics.ts';
+import { toInlineHints, uriToWorkspacePath, type LspPosition } from './diagnostics.ts';
 import { LspClient, type InitializeOptions, type LspTransport } from './lspClient.ts';
 
 /** Whether the server wants full (1) or incremental (2) document sync. */
@@ -36,6 +36,12 @@ export interface LanguageServiceOptions {
   readonly languageIdForPath?: (path: string) => string;
   /** Default per-request timeout. */
   readonly timeoutMs?: number;
+  /**
+   * Called after diagnostics for a file are applied to the hint store (even when
+   * the file is clean and there are none). The orchestrator uses this to resolve
+   * a "wait until the server has answered for this file" promise.
+   */
+  readonly onDiagnostics?: (filePath: string) => void;
 }
 
 interface OpenDocument {
@@ -81,6 +87,7 @@ export class LanguageService {
   private readonly hints: InlineHintManager;
   private readonly source: string;
   private readonly languageIdForPath: (path: string) => string;
+  private readonly onDiagnostics: ((filePath: string) => void) | undefined;
   private readonly documents = new Map<string, OpenDocument>();
   private readonly hintIdsByUri = new Map<string, string[]>();
   private syncKind: SyncKind = 'full';
@@ -91,6 +98,7 @@ export class LanguageService {
     this.hints = options.hints;
     this.source = options.source;
     this.languageIdForPath = options.languageIdForPath ?? defaultLanguageId;
+    this.onDiagnostics = options.onDiagnostics;
     this.client = new LspClient({
       transport: options.transport,
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
@@ -195,6 +203,13 @@ export class LanguageService {
     }
 
     const uri = payload.uri;
+    // Confine first: a URI outside the workspace is ignored entirely, and must
+    // not be mistaken for "a clean file" (which would resolve a waiter early).
+    const filePath = uriToWorkspacePath(uri, this.workspaceRoot);
+    if (filePath === null) {
+      return;
+    }
+
     this.clearDiagnosticsFor(uri);
 
     const inline = toInlineHints(
@@ -207,6 +222,10 @@ export class LanguageService {
       ids.push(this.hints.add(hint).id);
     }
     this.hintIdsByUri.set(uri, ids);
+
+    // Fire even when `inline` is empty: an empty publish means the file is clean,
+    // which is a real answer a waiter should wake on.
+    this.onDiagnostics?.(filePath);
   }
 
   private clearDiagnosticsFor(uri: string): void {

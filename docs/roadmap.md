@@ -35,11 +35,13 @@
 
 ## Next
 
-- [ ] LSP bridge (`variants/desktop`) using the same MCP tools
+- [x] LSP bridge (`variants/desktop`) using the same MCP tools
       - [x] Core LSP client (`common/lsp/`) — framing, diagnostics→hints, JSON-RPC
             client, stdio transport, document lifecycle
-      - [ ] Expose `get_diagnostics` as an MCP tool
-      - [ ] UI wiring (Tauri commands to configure/start the language server)
+      - [x] `get_diagnostics` / `configure_language_server` / `list_language_servers`
+            MCP tools + `LanguageServerManager` orchestration
+      - [x] UI wiring (check button, auto-check on open/save, settings section)
+- [ ] Feed `get_editor_context` from the UI (cursor/selection are still not pushed)
 - [ ] WASM compile target for `common/` (requires DOM-free audit)
 - [ ] Plugin marketplace with signature verification (`*.plg` signed bundles)
 - [ ] Remote MCP over Streamable HTTP for team workspaces

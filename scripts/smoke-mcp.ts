@@ -31,8 +31,11 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 /** Tools the core must advertise, sorted to make the comparison order-independent. */
 const EXPECTED_TOOLS: readonly string[] = [
   'ask_agent',
+  'configure_language_server',
+  'get_diagnostics',
   'get_editor_context',
   'list_directory',
+  'list_language_servers',
   'list_models',
   'read_file',
   'run_terminal_command',
@@ -109,6 +112,18 @@ async function main(): Promise<void> {
     const { tools: afterFailures } = await client.listTools();
     assert(afterFailures.length === EXPECTED_TOOLS.length, 'server degraded after rejected calls');
     console.error('[smoke] server still healthy after rejected calls');
+
+    // 6. The LSP diagnostics tool must answer even with no language server
+    //    configured: it reads the shared hint store, so it is a pure read that
+    //    must not depend on a spawned process.
+    const diagnostics = await client.callTool({ name: 'get_diagnostics', arguments: {} });
+    assert(diagnostics.isError !== true, 'get_diagnostics reported isError');
+    const diagnosticsText = (diagnostics.content[0] as { text?: string } | undefined)?.text ?? '';
+    assert(
+      diagnosticsText.includes('"count"'),
+      `get_diagnostics did not return a count; head: ${diagnosticsText.slice(0, 200)}`,
+    );
+    console.error('[smoke] get_diagnostics answered without a language server');
   } finally {
     await client.close();
   }

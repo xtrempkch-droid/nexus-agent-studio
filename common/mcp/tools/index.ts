@@ -27,3 +27,5 @@ export {
   type TerminalRunner,
   type TerminalToolsOptions,
 } from './terminalTools.ts';
+
+export { createLspTools, type LspToolsOptions } from './lspTools.ts';

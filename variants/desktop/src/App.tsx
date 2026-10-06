@@ -35,13 +35,17 @@ import {
 } from './lib/shell.ts';
 import {
   askAgent,
+  configureLanguageServer,
+  getDiagnostics,
   listDirectory,
+  listLanguageServers,
   listModels,
   readFile,
   runInSandbox,
   writeFile,
   type AgentTurnResult,
   type DirectoryEntry,
+  type LanguageServerStatus,
 } from './lib/coreClient.ts';
 import { AgentChat, type ChatMessage, type PendingApproval } from './components/AgentChat.tsx';
 import { FileExplorer, parentOf, type FileStatus } from './components/FileExplorer.tsx';
@@ -220,6 +224,11 @@ export default function App() {
   const [newProviderUrl, setNewProviderUrl] = useState('http://localhost:11434');
   const [newProviderKind, setNewProviderKind] = useState<'ollama' | 'openai'>('ollama');
   const [workspacePathDraft, setWorkspacePathDraft] = useState('');
+  const [languageServers, setLanguageServers] = useState<readonly LanguageServerStatus[]>([]);
+  const [newServerId, setNewServerId] = useState('typescript');
+  const [newServerLanguages, setNewServerLanguages] = useState('typescript,typescriptreact');
+  const [newServerCommand, setNewServerCommand] = useState('typescript-language-server');
+  const [newServerArgs, setNewServerArgs] = useState('--stdio');
 
   /** The provider whose models and settings are currently in use. */
   const activeProvider = useMemo(
@@ -321,6 +330,96 @@ export default function App() {
     );
   }, []);
 
+  /** Replace the stored diagnostics for one file, keeping the other files'. */
+  const mergeHints = useCallback((filePath: string, incoming: readonly InlineHint[]) => {
+    setHints((previous) => [
+      ...previous.filter((hint) => hint.filePath !== filePath),
+      ...incoming,
+    ]);
+  }, []);
+
+  /**
+   * Ask the core for a file's diagnostics, refreshing it in its language server
+   * first. This is the one path that brings diagnostics into the UI — compiler
+   * output and language-server output share the core's hint store.
+   */
+  const checkDiagnostics = useCallback(
+    (path: string, announce = false) => {
+      if (!isShellAvailable()) {
+        if (announce) {
+          appendTerminal(
+            line('stderr', 'O shell não está disponível — a verificação precisa do core.'),
+          );
+        }
+        return;
+      }
+      if (path === '') {
+        if (announce) {
+          appendTerminal(line('system', 'Nenhum arquivo ativo para verificar.'));
+        }
+        return;
+      }
+      void getDiagnostics({ path, refresh: true })
+        .then((result) => {
+          mergeHints(result.path ?? path, result.diagnostics);
+          if (announce && result.server === null) {
+            appendTerminal(
+              line('system', `Nenhum language server para ${path} — configure nas configurações.`),
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          if (announce) {
+            appendTerminal(line('stderr', `Falha ao verificar ${path}: ${String(error)}`));
+          }
+        });
+    },
+    [appendTerminal, mergeHints],
+  );
+
+  /** Reload the language servers the core knows about. */
+  const loadLanguageServers = useCallback(() => {
+    if (!isShellAvailable()) {
+      return;
+    }
+    void listLanguageServers()
+      .then((result) => setLanguageServers(result.servers))
+      .catch(() => undefined);
+  }, []);
+
+  /** Register a language server from the settings form. */
+  const addLanguageServer = useCallback(() => {
+    const id = newServerId.trim();
+    const command = newServerCommand.trim();
+    const languages = newServerLanguages
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '');
+    if (id === '' || command === '' || languages.length === 0) {
+      return;
+    }
+    const args = newServerArgs
+      .split(/\s+/u)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '');
+
+    void configureLanguageServer({
+      id,
+      languages,
+      command,
+      ...(args.length === 0 ? {} : { args }),
+    })
+      .then((result) => {
+        setLanguageServers(result.configured);
+        appendTerminal(
+          line('system', `Language server "${id}" configurado (${languages.join(', ')}).`),
+        );
+      })
+      .catch((error: unknown) => {
+        appendTerminal(line('stderr', `Falha ao configurar o language server: ${String(error)}`));
+      });
+  }, [appendTerminal, newServerArgs, newServerCommand, newServerId, newServerLanguages]);
+
   /**
    * Focus a file, reading it from the core the first time it is opened.
    *
@@ -346,12 +445,15 @@ export default function App() {
       }
 
       void readFile(path)
-        .then((contents) => updateFile(path, contents.content, 'normal'))
+        .then((contents) => {
+          updateFile(path, contents.content, 'normal');
+          checkDiagnostics(path);
+        })
         .catch((error: unknown) => {
           appendTerminal(line('stderr', `Falha ao ler ${path}: ${String(error)}`));
         });
     },
-    [appendTerminal, updateFile],
+    [appendTerminal, checkDiagnostics, updateFile],
   );
 
   /**
@@ -373,11 +475,12 @@ export default function App() {
         appendTerminal(
           line('system', `WRITE: ${outcome.path} salvo (${String(outcome.bytesWritten)} bytes)`),
         );
+        checkDiagnostics(target.path);
       })
       .catch((error: unknown) => {
         appendTerminal(line('stderr', `Falha ao salvar ${target.path}: ${String(error)}`));
       });
-  }, [activeFile, appendTerminal, files, updateFile]);
+  }, [activeFile, appendTerminal, checkDiagnostics, files, updateFile]);
 
   /** List one directory and make it the explorer's current view. */
   const loadDirectory = useCallback(
@@ -429,9 +532,11 @@ export default function App() {
       setPendingApproval(null);
       resumeQueue.current.clear();
       appendTerminal(line('system', `Workspace: ${path}`));
+      // The core restarts pointed at the new directory, so re-read its servers.
+      loadLanguageServers();
       await loadDirectory('.');
     },
-    [appendTerminal, loadDirectory],
+    [appendTerminal, loadDirectory, loadLanguageServers],
   );
 
   /** Open the native folder picker and switch to the chosen project. */
@@ -497,6 +602,7 @@ export default function App() {
       appendTerminal(line('system', `Workspace: ${workspace}`));
 
       await loadDirectory('.');
+      loadLanguageServers();
     };
 
     void connect().catch((error: unknown) => {
@@ -511,7 +617,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appendTerminal, loadDirectory]);
+  }, [appendTerminal, loadDirectory, loadLanguageServers]);
 
   // Subscribe to the core's agent progress stream once, when the shell is
   // available. `answer_delta` fills the streaming bubble; `tool_call` surfaces
@@ -812,6 +918,7 @@ export default function App() {
         connectionDotClass={connectionDotClass}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenWorkspace={() => void openWorkspace()}
+        onCheckDiagnostics={() => checkDiagnostics(activeFile, true)}
       />
 
       <div className="relative flex flex-1 overflow-hidden">
@@ -1148,6 +1255,73 @@ export default function App() {
                   ))}
                 </div>
               )}
+
+              <div className="space-y-1.5 rounded border border-slate-800 bg-slate-950/40 p-2">
+                <span className="font-medium text-slate-300">Servidores de linguagem (LSP)</span>
+                <p className="text-[10px] leading-relaxed text-slate-500">
+                  Um servidor por linguagem; ele inicia sozinho na primeira verificação.
+                  Ex.: `typescript-language-server --stdio` para TypeScript.
+                </p>
+
+                {languageServers.length === 0 ? (
+                  <p className="font-mono text-[10px] text-slate-500">Nenhum configurado.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {languageServers.map((server) => (
+                      <div
+                        key={server.id}
+                        className="flex items-center justify-between rounded border border-slate-800 bg-slate-950/60 px-2 py-1"
+                      >
+                        <span className="font-mono text-slate-300">
+                          {server.id}
+                          <span className="ml-1 text-[10px] text-slate-500">
+                            ({server.languages.join(', ')} · {server.command})
+                          </span>
+                        </span>
+                        <span
+                          className={`text-[10px] ${
+                            server.running ? 'text-emerald-400' : 'text-slate-500'
+                          }`}
+                        >
+                          {server.running ? 'ativo' : 'parado'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <input
+                  value={newServerId}
+                  onChange={(event) => setNewServerId(event.target.value)}
+                  placeholder="id (ex: typescript)"
+                  className="w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+                />
+                <input
+                  value={newServerLanguages}
+                  onChange={(event) => setNewServerLanguages(event.target.value)}
+                  placeholder="linguagens (ex: typescript,typescriptreact)"
+                  className="w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+                />
+                <input
+                  value={newServerCommand}
+                  onChange={(event) => setNewServerCommand(event.target.value)}
+                  placeholder="comando (ex: typescript-language-server)"
+                  className="w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+                />
+                <input
+                  value={newServerArgs}
+                  onChange={(event) => setNewServerArgs(event.target.value)}
+                  placeholder="argumentos (ex: --stdio)"
+                  className="w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={addLanguageServer}
+                  className="w-full rounded border border-slate-700 bg-slate-800 py-1.5 font-medium text-slate-200 hover:bg-slate-700"
+                >
+                  Adicionar servidor
+                </button>
+              </div>
             </div>
 
             <div className="flex justify-end border-t border-slate-800 pt-3">
