@@ -376,13 +376,49 @@ node dist/core.mjs      # core como MCP server stdio
     no browser com um `window.__TAURI__` **stubado** registrando as chamadas:
     relatório ao conectar, seleção (`{start,end}` + cursor), debounce (N teclas → 1
     envio) e `dirty: true` ao editar.
+18. ✅ **Aba do editor fecha, e o agente ganhou orçamento configurável.** Depois de
+    usar o programa: faltava um botão para fechar a aba, e a IA "não tinha tempo de
+    criar os arquivos". Havia **dois** tetos fixos, e os dois apareceram na mesma
+    reclamação:
+    - **Tempo** — o shell esperava 600 s por uma chamada de tool e não havia como
+      aumentar. `call_core_tool` agora aceita `timeoutSeconds` opcional, com o clamp
+      (10 s … 24 h) num lugar só, `mcp::tool_timeout` — o valor vem de um campo que
+      uma pessoa digitou, e os dois extremos são falhas reais: curto demais e nem
+      `tools/list` termina; longo demais e um core travado segura a sessão (e a UI
+      que espera por ela) para sempre.
+    - **Passos** — o loop rodava no máximo **6** idas e voltas ao modelo e o
+      `ask_agent` **não oferecia** como mudar isso. Seis serve para uma pergunta e é
+      apertado para "crie estes arquivos", onde cada arquivo é **uma** chamada de
+      tool mais a rodada que as pede — exatamente o formato de tarefa que estava
+      ficando pela metade. O schema agora expõe `maxSteps` (1…50, padrão 6, vindo de
+      `DEFAULT_MAX_STEPS`/`MAX_MAX_STEPS` exportados) e o loop clampa de novo para
+      quem o chama direto (teste, plugin).
+    - **UI**: botão **X** em cada aba (dois botões irmãos, não um dentro do outro —
+      aninhar é HTML inválido e o clique cai no alvo errado), fechando a última aba o
+      editor esvazia em vez de continuar mostrando arquivo fechado, e o registro do
+      arquivo fica em `files` de propósito (pode haver edição não salva; descartá-la
+      por um clique errado é pior). Nas configurações, seção **"Tempo do agente"**
+      com os dois campos, commits **no blur** (clampar a cada tecla transforma "600"
+      em "10" no primeiro dígito) e mostrando o valor que será usado de fato. O
+      erro de timeout agora diz **qual configuração** aumentar e o valor em vigor.
+    - **Correção de quebra encontrada no teste:** uma resposta de `get_diagnostics`
+      sem o campo `diagnostics` espalhava `undefined` e derrubava a tela inteira
+      (branca). Lista vazia é a leitura honesta de "sem diagnósticos".
+    **Verificado:** 227 testes (eram 225; +2 em `agentTools.test.ts`) e, no browser
+    com `window.__TAURI__` stubado: fechar a aba ativa passa para a vizinha (e a do
+    meio passa para a que toma o lugar), 0 abas → editor vazio e **Salvar
+    desabilitado**, campos com padrão 600/6, clamp 10/86400 e 1/50, e o repasse
+    chegando como `timeoutSeconds: 1800` **no comando** (fora dos argumentos da tool)
+    e `maxSteps: 20` **nos argumentos**. A mensagem de timeout foi conferida
+    injetando a falha do shell.
 
 ---
 
 **Ao retomar.** Todo o **LSP bridge** (§5 item 14) está implementado e mergeado:
 cliente, orquestração, tools MCP (`get_diagnostics`, `configure_language_server`,
 `list_language_servers`) e fiação na UI. O `get_editor_context` também deixou de ser
-placeholder (§5 item 17) e a correção do travamento da janela está em `main` desde o
+placeholder (§5 item 17), o agente tem **orçamento configurável** (tempo e passos,
+§5 item 18) e a correção do travamento da janela está em `main` desde o
 PR #8 (§3 item 24 — falta só **reconstruir o `.exe`**). O **sandbox Docker passou a
 funcionar de fato** (§3 itens 25–28): era o último pedaço da fase 3 que só tinha
 teste unitário, e agora está verificado em runtime compilando C de verdade. O que
