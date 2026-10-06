@@ -1,12 +1,26 @@
 name: desktop-binary
 
-# Produces a runnable desktop binary as a downloadable artifact.
+# Produces a runnable desktop bundle as a downloadable artifact.
 #
 # Why this exists: until now nobody had ever *opened* this app. The development
 # machine has no Node and the CI runners have no display, so the project existed
 # only as code that compiles. `tauri build --no-bundle` skips the installer step
 # entirely — which also means it needs no `.ico`/`.icns` — and leaves a plain
-# executable that can be downloaded and run.
+# executable.
+#
+# The executable alone is not enough to run, and discovering that in the field
+# would be miserable, so the artifact is assembled here instead of assumed:
+#
+#   * `dist/core.mjs` is built with `--packages=external`, so it imports the MCP
+#     SDK and zod *at run time* rather than carrying them. Without `node_modules`
+#     the core dies with ERR_MODULE_NOT_FOUND — which the smoke test cannot
+#     catch, because there `node_modules` already exists.
+#   * The shell spawns that core through `node`, so the runtime travels in
+#     `runtime/node`. That is what lets the app work on a machine that never
+#     installed Node.
+#
+# A third-party prerequisite remains and is not papered over: a Tauri window on
+# Linux needs WebKitGTK at run time, which no amount of bundling can supply.
 #
 # Also runs on push when the shell or the UI changes, so the artifact stays
 # current without anyone having to remember to trigger it. Drop that trigger if
@@ -24,8 +38,8 @@ permissions:
   contents: read
 
 jobs:
-  binary:
-    name: binary (${{ matrix.os }})
+  bundle:
+    name: bundle (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -49,10 +63,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      # Both are needed by the packaged app: the frontend is embedded into the
-      # binary by `tauri::generate_context!`, and the shell spawns
-      # `dist/core.mjs` at runtime, so it has to ship next to the executable.
-      - name: Build frontend and core
+      # The frontend is embedded into the binary by `tauri::generate_context!`,
+      # so it has to exist before the shell is compiled.
+      - name: Build the frontend and the core
         run: |
           npm run build
           npm run build:desktop
@@ -84,28 +97,83 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-
 
       # `npx` is deliberate: it runs the CLI without adding it to package.json,
-      # so `package-lock.json` stays valid and the `npm ci` step keeps working.
+      # so `package-lock.json` stays valid and the `npm ci` steps keep working.
       # Declaring `@tauri-apps/cli` as a dependency would invalidate the lockfile.
-      - name: Build the binary
+      #
+      # This has to run *before* the prune below, because `beforeBuildCommand`
+      # invokes Vite, which lives in devDependencies.
+      - name: Build the shell binary
         run: npx --yes @tauri-apps/cli@2.12.1 build --no-bundle --ci
 
-      - name: Report what was produced
+      - name: Assemble the portable bundle
         run: |
-          echo "=== release directory ==="
-          ls -la src-tauri/target/release/ | head -30
-          echo
-          echo "=== the two files the artifact carries ==="
-          ls -la src-tauri/target/release/nexus-agent-studio-shell dist/core.mjs
+          set -euo pipefail
+          rm -rf bundle
+          mkdir -p bundle/dist bundle/runtime
 
-      # Both files land at the root of the downloaded archive, which is the
-      # layout the shell expects: it resolves `dist/core.mjs` relative to the
-      # directory it is run from.
-      - name: Upload the binary
+          cp src-tauri/target/release/nexus-agent-studio-shell bundle/
+          cp dist/core.mjs bundle/dist/core.mjs
+
+          # `--packages=external` means the core resolves its imports at run
+          # time, so production dependencies have to travel with it.
+          npm ci --omit=dev --no-audit --no-fund
+          cp -r node_modules bundle/node_modules
+
+          # Copied rather than downloaded: this is the exact Node the build just
+          # used, so there is no version to keep in sync and no release naming
+          # scheme to assume. The line after it proves the copy actually runs.
+          cp "$(command -v node)" bundle/runtime/node
+          chmod +x bundle/runtime/node
+          ./bundle/runtime/node --version
+
+          # Zipped artifacts lose file permissions — everything comes back 644 —
+          # so the executable bits are restored at run time instead of asked of
+          # the user. `readlink -f` first, because the shell is resolved relative
+          # to the directory it is run from.
+          cat > bundle/RUN.sh <<'RUN'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$(dirname "$(readlink -f "$0")")"
+          chmod +x nexus-agent-studio-shell runtime/node
+          exec ./nexus-agent-studio-shell "$@"
+          RUN
+          chmod +x bundle/RUN.sh bundle/nexus-agent-studio-shell
+
+      - name: Report the bundle
+        run: |
+          set -euo pipefail
+          du -sh bundle
+          ls -la bundle
+
+      # The check that would have caught the missing `node_modules`: it runs the
+      # bundled core under the bundled runtime, from inside the bundle, with the
+      # very handshake `mcp.rs` already proves works. Passing here means the
+      # artifact is self-sufficient rather than merely present.
+      - name: Verify the bundle handshakes on its own
+        run: |
+          set -euo pipefail
+          cd bundle
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"bundle-check","version":"1.0.0"}}}' \
+            | timeout 60 ./runtime/node ./dist/core.mjs > /tmp/handshake.json 2> /tmp/handshake.err || true
+
+          echo "--- stdout ---"
+          cat /tmp/handshake.json
+          echo "--- stderr ---"
+          cat /tmp/handshake.err
+
+          if ! grep -q '"result"' /tmp/handshake.json; then
+            echo "::error::the bundled core produced no initialize result, so the artifact cannot run standalone"
+            exit 1
+          fi
+          echo "handshake ok: $(tr -d '\n' < /tmp/handshake.json)"
+
+      # A single directory path, so its *contents* become the artifact root.
+      # Passing the two files separately would use their least common ancestor —
+      # the repository root — and bury the executable under src-tauri/.
+      - name: Upload the bundle
         uses: actions/upload-artifact@v5
         with:
-          name: nexus-agent-studio-linux
-          path: |
-            src-tauri/target/release/nexus-agent-studio-shell
-            dist/core.mjs
+          name: nexus-agent-studio-linux-x64
+          path: bundle/
           if-no-files-found: error
           retention-days: 30
