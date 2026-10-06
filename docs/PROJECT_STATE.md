@@ -4,7 +4,8 @@
 > de parada sobrevivam ao fim de uma janela de contexto. Se você é uma IA ou um
 > humano retomando este repositório, **leia este arquivo primeiro**.
 >
-> **Última atualização:** 2026-10-05 · **Commit de referência:** `051b8de`
+> **Última atualização:** 2026-10-05 · **Commit atual:** confira com
+> `git log -1 --oneline`
 
 ---
 
@@ -121,6 +122,7 @@ TypeScript 7.0.2, `@typescript/typescript6` 6.0.2, esbuild 0.28.2, ESLint 10.x.
 Ao terminar qualquer mudança relevante:
 
 1. Atualize **§2** (status) e **§5** (próximos passos).
-2. Atualize a linha **"Última atualização"** e o **commit de referência** em §0.
+2. Atualize a linha **"Última atualização"** no cabeçalho (o hash do commit é
+   obtido com `git log -1 --oneline`, nunca fixado no texto — ficaria defasado).
 3. Se uma decisão de stack mudar, registre em **§6** com a fonte oficial.
 4. Se um invariante mudar, atualize **§7** e o relatório equivalente em `AGENTS.md`.

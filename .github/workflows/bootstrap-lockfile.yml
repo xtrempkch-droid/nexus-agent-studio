@@ -38,11 +38,11 @@ jobs:
           {
             echo "### package-lock.json gerado"
             echo ""
-            echo "Baixe o artefato \`package-lock\` abaixo e commite-o na raiz do repositório."
-            echo "Depois troque o passo de install do \`build.yml\` de volta para \`npm ci\`"
-            echo "e reative \`cache: npm\`."
+            echo "Baixe o artefato 'package-lock' abaixo e commite-o na raiz do repositorio."
+            echo "Depois troque o passo de install do build.yml de volta para npm ci"
+            echo "e reative cache: npm no actions/setup-node."
             echo ""
-            echo "Dependências resolvidas: $(node -e "console.log(Object.keys(require('./package-lock.json').packages||{}).length)") entradas"
+            echo "Linhas no lockfile: $(wc -l < package-lock.json)"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload lockfile
