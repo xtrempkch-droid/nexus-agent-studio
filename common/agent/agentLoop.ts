@@ -90,8 +90,25 @@ export interface AgentTurnResult {
   readonly assistantJson?: string;
 }
 
-/** Default number of model round-trips before giving up. */
-const DEFAULT_MAX_STEPS = 6;
+/**
+ * Default number of model round-trips before giving up.
+ *
+ * Exported because the `ask_agent` schema offers it to the caller: the budget is
+ * a property of the task, not of the loop — a one-line question is fine in a few
+ * steps while "create these files" needs one round trip per file — and only the
+ * caller knows which it is sending. Duplicating the number in the tool would let
+ * the advertised default drift from the one actually used.
+ */
+export const DEFAULT_MAX_STEPS = 6;
+
+/**
+ * Hard ceiling for a caller-supplied step budget.
+ *
+ * Each step is a full model round trip, so an unbounded budget is an unbounded
+ * bill and, on a local model, an unbounded wait. High enough to be irrelevant for
+ * real work, low enough that a typo cannot start a loop that never ends.
+ */
+export const MAX_MAX_STEPS = 50;
 
 function buildSystemPrompt(tools: readonly AgentTool[]): string {
   const toolLines = tools.map((tool) => `- ${tool.name}: ${tool.description}`).join('\n');
@@ -199,7 +216,13 @@ async function executeNamed(
 
 /** Run one bounded agent turn. */
 export async function runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResult> {
-  const maxSteps = request.maxSteps ?? DEFAULT_MAX_STEPS;
+  // Clamped here as well as in the tool schema: every step is a model round trip,
+  // so a caller that reaches this function directly (a test, a plugin) must not be
+  // able to start a loop that never ends.
+  const maxSteps = Math.min(
+    MAX_MAX_STEPS,
+    Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_MAX_STEPS)),
+  );
   const mode = request.mode ?? 'autonomous';
   const toolsByName = new Map<string, AgentTool>();
   for (const tool of request.tools) {

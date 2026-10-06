@@ -42,15 +42,6 @@ const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long each step of the MCP handshake may take.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// How long a single tool call may take.
-///
-/// Generous next to the handshake on purpose: `run_terminal_command` waits on a
-/// container, and a task turn waits on a local model that can be slow on CPU.
-/// Ten minutes is a ceiling for "the model is still thinking", not a target — a
-/// shorter value turns a slow local model into a spurious timeout failure the
-/// user reads as a freeze.
-const TOOL_TIMEOUT: Duration = Duration::from_secs(600);
-
 /// State shared with the commands.
 struct ShellState {
     /// Where the bundle lives: `dist/core.mjs` and `runtime/node` resolve from
@@ -256,15 +247,22 @@ fn describe_core(session: &mut CoreSession) -> Result<String, SessionError> {
 /// the WebKitGTK window, which the desktop environment then labels "not
 /// responding". Moving the blocking stdio work off the main thread is the fix;
 /// the longer timeout makes the wait long, and this makes a long wait harmless.
+///
+/// `timeout_seconds` is the webview's setting for how long a model turn may take
+/// (Tauri renames arguments to camelCase, so it arrives as `timeoutSeconds`). It
+/// is optional: without it [`mcp::tool_timeout`] applies its documented default,
+/// which keeps every existing caller working and keeps the clamp in one place.
 #[tauri::command]
 async fn call_core_tool(
     app: tauri::AppHandle,
     tool: String,
     arguments: Value,
+    timeout_seconds: Option<u64>,
 ) -> Result<Value, String> {
+    let timeout = mcp::tool_timeout(timeout_seconds);
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<ShellState>();
-        state.with_core(move |session| session.call_tool(&tool, arguments, TOOL_TIMEOUT))
+        state.with_core(move |session| session.call_tool(&tool, arguments, timeout))
     })
     .await
     .map_err(|error| format!("a chamada ao core falhou: {error}"))?

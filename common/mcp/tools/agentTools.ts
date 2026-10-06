@@ -13,7 +13,13 @@
  */
 
 import * as z from 'zod/v4';
-import { runAgentTurn, type AgentProgressEvent, type AgentTool } from '../../agent/agentLoop.ts';
+import {
+  DEFAULT_MAX_STEPS,
+  MAX_MAX_STEPS,
+  runAgentTurn,
+  type AgentProgressEvent,
+  type AgentTool,
+} from '../../agent/agentLoop.ts';
 import type { LlmStreamFetcher } from '../../agent/llmClient.ts';
 import {
   errorResult,
@@ -50,6 +56,16 @@ export function createAgentTools(options: AgentToolsOptions): ToolRegistration[]
       pendingTool: z.string().optional(),
       pendingArguments: z.unknown().optional(),
       decision: z.enum(['approve', 'reject']).optional(),
+      maxSteps: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_MAX_STEPS)
+        .default(DEFAULT_MAX_STEPS)
+        .describe(
+          'How many model round-trips the turn may use. Each step is one tool call, ' +
+            'so a task that writes several files needs at least one step per file.',
+        ),
     }),
   };
 
@@ -75,6 +91,7 @@ export function createAgentTools(options: AgentToolsOptions): ToolRegistration[]
       pendingTool,
       pendingArguments,
       decision,
+      maxSteps,
     } = args;
 
     if (typeof prompt !== 'string' && history === undefined) {
@@ -107,6 +124,7 @@ export function createAgentTools(options: AgentToolsOptions): ToolRegistration[]
         pendingTool,
         pendingArguments,
         decision,
+        maxSteps,
         tools: agentTools,
         ...(onProgress === undefined ? {} : { onProgress }),
         ...(options.streamFetcher === undefined ? {} : { streamFetcher: options.streamFetcher }),

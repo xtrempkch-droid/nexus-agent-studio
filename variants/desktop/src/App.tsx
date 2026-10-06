@@ -183,6 +183,55 @@ function uid(): string {
  */
 const CONTEXT_DEBOUNCE_MS = 400;
 
+/**
+ * How long the shell waits for one tool call before giving up, in seconds.
+ *
+ * Must agree with `DEFAULT_TOOL_TIMEOUT_SECONDS` in `src-tauri/src/mcp.rs`. It is
+ * a copy rather than an import because the value lives in the Rust shell, which
+ * the webview cannot read, and because `variants/desktop` may only import types
+ * from the core. A turn is a single `ask_agent` call, so this is the model's time
+ * budget: the default is a ceiling for "the model is still thinking", not a
+ * target, and the user can raise it because only they know how slow their model
+ * is.
+ */
+const DEFAULT_TOOL_TIMEOUT_SECONDS = 600;
+
+/** Shortest and longest timeout accepted, mirroring the clamp in `mcp::tool_timeout`. */
+const MIN_TOOL_TIMEOUT_SECONDS = 10;
+const MAX_TOOL_TIMEOUT_SECONDS = 86_400;
+
+/**
+ * How many model round-trips one turn may use.
+ *
+ * Mirrors `DEFAULT_MAX_STEPS` / `MAX_MAX_STEPS` in `common/agent/agentLoop.ts`,
+ * for the same reason as the timeout above: the values live in the core, which the
+ * webview may only import types from. The core clamps too, so a disagreement here
+ * would be visible in the field rather than silent.
+ */
+const DEFAULT_MAX_STEPS = 6;
+const MAX_MAX_STEPS = 50;
+
+/**
+ * Clamp a typed timeout to the range the shell will honour.
+ *
+ * Clamped here as well as in the shell so the field never displays a number that
+ * the shell is quietly going to change.
+ */
+function clampTimeoutSeconds(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_TOOL_TIMEOUT_SECONDS;
+  }
+  return Math.min(MAX_TOOL_TIMEOUT_SECONDS, Math.max(MIN_TOOL_TIMEOUT_SECONDS, Math.round(value)));
+}
+
+/** Clamp a typed step budget to the range the core will honour. */
+function clampMaxSteps(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_MAX_STEPS;
+  }
+  return Math.min(MAX_MAX_STEPS, Math.max(1, Math.round(value)));
+}
+
 /** Convert a UTF-16 offset in `text` to a 1-based line/column, as the core expects. */
 function offsetToPosition(text: string, offset: number): CursorPosition {
   const clamped = Math.max(0, Math.min(offset, text.length));
@@ -249,6 +298,17 @@ export default function App() {
   const [newProviderUrl, setNewProviderUrl] = useState('http://localhost:11434');
   const [newProviderKind, setNewProviderKind] = useState<'ollama' | 'openai'>('ollama');
   const [workspacePathDraft, setWorkspacePathDraft] = useState('');
+  /**
+   * How long the shell waits for one answer from the model.
+   *
+   * Held as a string while the user types: clamping on every keystroke would turn
+   * "600" into "10" the moment the first digit lands.
+   */
+  const [toolTimeoutDraft, setToolTimeoutDraft] = useState(String(DEFAULT_TOOL_TIMEOUT_SECONDS));
+  const [toolTimeoutSeconds, setToolTimeoutSeconds] = useState(DEFAULT_TOOL_TIMEOUT_SECONDS);
+  /** How many model round-trips a turn gets; same draft-then-commit reasoning. */
+  const [maxStepsDraft, setMaxStepsDraft] = useState(String(DEFAULT_MAX_STEPS));
+  const [agentMaxSteps, setAgentMaxSteps] = useState(DEFAULT_MAX_STEPS);
   const [languageServers, setLanguageServers] = useState<readonly LanguageServerStatus[]>([]);
   const [newServerId, setNewServerId] = useState('typescript');
   const [newServerLanguages, setNewServerLanguages] = useState('typescript,typescriptreact');
@@ -482,9 +542,13 @@ export default function App() {
 
   /** Replace the stored diagnostics for one file, keeping the other files'. */
   const mergeHints = useCallback((filePath: string, incoming: readonly InlineHint[]) => {
+    // `incoming` comes straight off the wire: `get_diagnostics` is typed by hand
+    // at the boundary, so a core that answered with a different shape would
+    // otherwise spread `undefined` and take the whole view down with a blank
+    // screen. An empty list is the honest reading of "no diagnostics".
     setHints((previous) => [
       ...previous.filter((hint) => hint.filePath !== filePath),
-      ...incoming,
+      ...(Array.isArray(incoming) ? incoming : []),
     ]);
   }, []);
 
@@ -693,6 +757,30 @@ export default function App() {
   }, [currentDir, loadDirectory]);
 
   /**
+   * Close one tab.
+   *
+   * The closed file's record in `files` deliberately stays: the buffer may hold
+   * edits the user has not saved, and dropping them because of a mis-click is
+   * worse than keeping an entry a re-open replaces anyway. The tab that takes its
+   * place becomes active — and when the last tab goes, the editor empties rather
+   * than showing a file that is no longer open.
+   */
+  const closeTab = useCallback(
+    (path: string) => {
+      const index = openTabs.indexOf(path);
+      if (index === -1) {
+        return;
+      }
+      const remaining = openTabs.filter((tab) => tab !== path);
+      setOpenTabs(remaining);
+      if (path === activeFile) {
+        setActiveFile(remaining[index] ?? remaining[index - 1] ?? '');
+      }
+    },
+    [activeFile, openTabs],
+  );
+
+  /**
    * Re-point the editor at a new workspace and reset every view that was scoped
    * to the old one: files, explorer, tabs, diagnostics, terminals and any
    * pending approval. The chat history is intentionally kept — it belongs to the
@@ -882,9 +970,15 @@ export default function App() {
   const failTurn = useCallback(
     (error: unknown) => {
       setBusy(false);
-      finishStreamingMessage(`Falha ao executar o agente: ${String(error)}`);
+      const message = String(error);
+      // A timeout is the one agent failure the user can fix from the UI, and the
+      // raw message ("no reply to tools/call … within 600s") does not say how.
+      const hint = message.includes('timeout')
+        ? ` — aumente o "Tempo do agente" nas configurações (agora ${String(toolTimeoutSeconds)} s)`
+        : '';
+      finishStreamingMessage(`Falha ao executar o agente: ${message}${hint}`);
     },
-    [finishStreamingMessage],
+    [finishStreamingMessage, toolTimeoutSeconds],
   );
 
   const resumeQueue = useRef(new Map<string, AgentResumeState>());
@@ -910,7 +1004,13 @@ export default function App() {
         return;
       }
 
-      const base = { model: modelName, baseUrl: provider.baseUrl, kind: provider.kind };
+      const base = {
+        model: modelName,
+        baseUrl: provider.baseUrl,
+        kind: provider.kind,
+        timeoutSeconds: toolTimeoutSeconds,
+        maxSteps: agentMaxSteps,
+      };
       const effectiveMode = mode === 'assisted' && !approveAll ? 'assisted' : 'autonomous';
 
       try {
@@ -958,7 +1058,7 @@ export default function App() {
         failTurn(error);
       }
     },
-    [activeModel, activeProvider, approveAll, dropStreamingMessage, failTurn, finishTurn, mode],
+    [activeModel, activeProvider, agentMaxSteps, approveAll, dropStreamingMessage, failTurn, finishTurn, mode, toolTimeoutSeconds],
   );
 
   const handleSend = useCallback(
@@ -1152,18 +1252,33 @@ export default function App() {
           <div className="flex h-9 shrink-0 items-center gap-2 border-b border-slate-800/80 bg-ide-sidebar px-2 font-mono text-xs">
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
               {openTabs.map((tab) => (
-                <button
+                // Two buttons, not a button inside a button: nested buttons are
+                // invalid HTML and the click would bubble into the wrong one.
+                <div
                   key={tab}
-                  type="button"
-                  onClick={() => setActiveFile(tab)}
-                  className={`flex items-center gap-2 rounded-t border-r border-slate-800/60 px-3 py-1.5 ${
+                  className={`flex shrink-0 items-center gap-0.5 rounded-t border-r border-slate-800/60 pr-1 ${
                     tab === activeFile
                       ? 'border-t-2 border-indigo-500 bg-ide-editor text-slate-100'
                       : 'bg-slate-900/40 text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  <span>{tab}</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveFile(tab)}
+                    className="py-1.5 pl-3 pr-1 text-left"
+                  >
+                    {tab}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => closeTab(tab)}
+                    title={`Fechar ${tab}`}
+                    aria-label={`Fechar ${tab}`}
+                    className="rounded p-0.5 text-slate-500 transition-colors hover:bg-slate-700/70 hover:text-slate-100"
+                  >
+                    <Icon name="x" className="h-3 w-3" />
+                  </button>
+                </div>
               ))}
             </div>
 
@@ -1548,6 +1663,90 @@ export default function App() {
                 >
                   Adicionar servidor
                 </button>
+              </div>
+
+              <div className="space-y-1.5 rounded border border-slate-800 bg-slate-950/40 p-2">
+                <span className="font-medium text-slate-300">Tempo do agente</span>
+                <p className="text-[10px] leading-relaxed text-slate-500">
+                  Quanto tempo uma resposta da IA pode demorar antes de virar erro de
+                  timeout. Um modelo local em CPU precisa de minutos — se a IA for
+                  interrompida antes de terminar a tarefa, aumente aqui. Padrão:{' '}
+                  {String(DEFAULT_TOOL_TIMEOUT_SECONDS)} s ({DEFAULT_TOOL_TIMEOUT_SECONDS / 60} min).
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={MIN_TOOL_TIMEOUT_SECONDS}
+                    max={MAX_TOOL_TIMEOUT_SECONDS}
+                    value={toolTimeoutDraft}
+                    onChange={(event) => setToolTimeoutDraft(event.target.value)}
+                    onBlur={() => {
+                      // Commit on blur, not on every keystroke: clamping as the
+                      // user types turns "600" into "10" at the first digit.
+                      const next = clampTimeoutSeconds(Number(toolTimeoutDraft));
+                      setToolTimeoutSeconds(next);
+                      setToolTimeoutDraft(String(next));
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    aria-label="Tempo máximo por resposta da IA, em segundos"
+                    className="w-28 rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-slate-500">
+                    segundos ({(toolTimeoutSeconds / 60).toFixed(1)} min)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setToolTimeoutSeconds(DEFAULT_TOOL_TIMEOUT_SECONDS);
+                      setToolTimeoutDraft(String(DEFAULT_TOOL_TIMEOUT_SECONDS));
+                    }}
+                    className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-700"
+                  >
+                    Padrão
+                  </button>
+                </div>
+
+                <p className="text-[10px] leading-relaxed text-slate-500">
+                  Quantas idas e voltas ao modelo uma tarefa pode usar. Cada passo é uma
+                  ferramenta: criar vários arquivos precisa de um passo por arquivo — se a IA
+                  parar antes de terminar, aumente aqui. Padrão: {String(DEFAULT_MAX_STEPS)}.
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={MAX_MAX_STEPS}
+                    value={maxStepsDraft}
+                    onChange={(event) => setMaxStepsDraft(event.target.value)}
+                    onBlur={() => {
+                      const next = clampMaxSteps(Number(maxStepsDraft));
+                      setAgentMaxSteps(next);
+                      setMaxStepsDraft(String(next));
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    aria-label="Máximo de passos do agente por tarefa"
+                    className="w-28 rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-slate-500">passos por tarefa</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAgentMaxSteps(DEFAULT_MAX_STEPS);
+                      setMaxStepsDraft(String(DEFAULT_MAX_STEPS));
+                    }}
+                    className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-700"
+                  >
+                    Padrão
+                  </button>
+                </div>
               </div>
             </div>
 

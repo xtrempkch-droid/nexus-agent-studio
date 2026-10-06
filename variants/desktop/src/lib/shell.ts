@@ -85,9 +85,22 @@ export function workspaceInfo(): Promise<string> {
  * including `isError: true` for a tool that failed, which is an ordinary
  * outcome to inspect rather than an exception to catch. Only a broken exchange
  * rejects.
+ *
+ * `timeoutSeconds` overrides how long the shell waits for the reply. It matters
+ * only where the wait is the model's: a turn is one `ask_agent` call, so on a slow
+ * local model this is the difference between an answer and a spurious timeout.
+ * Omitted, the shell's own default applies.
  */
-export function callCoreTool<T = unknown>(tool: string, args: object = {}): Promise<T> {
-  return invokeShell<T>('call_core_tool', { tool, arguments: args });
+export function callCoreTool<T = unknown>(
+  tool: string,
+  args: object = {},
+  timeoutSeconds?: number,
+): Promise<T> {
+  return invokeShell<T>('call_core_tool', {
+    tool,
+    arguments: args,
+    ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+  });
 }
 
 /**

@@ -53,6 +53,33 @@ pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// constant wins.
 pub const REQUESTED_PROTOCOL_VERSION: &str = "2026-07-28";
 
+/// Ceiling for a single tool call, in seconds, when the webview does not ask for
+/// one. Ten minutes is a ceiling for "the model is still thinking", not a target.
+pub const DEFAULT_TOOL_TIMEOUT_SECONDS: u64 = 600;
+
+/// Shortest tool-call timeout a caller may ask for, in seconds.
+const MIN_TOOL_TIMEOUT_SECONDS: u64 = 10;
+
+/// Longest tool-call timeout a caller may ask for, in seconds (24 h).
+const MAX_TOOL_TIMEOUT_SECONDS: u64 = 86_400;
+
+/// Turn a caller-supplied timeout into a usable duration.
+///
+/// The webview owns this value because only the user knows how slow their model
+/// is: a turn is one `ask_agent` call, and a local model on CPU can need far more
+/// than the default while a hosted one needs seconds. It is clamped rather than
+/// rejected because the value arrives from a setting a human typed, and the two
+/// failure modes are both real: too small and even `tools/list` cannot finish,
+/// too large and a wedged core holds the session (and the UI waiting on it) for
+/// ever. `None` means "no preference", which is the default, not "no timeout".
+pub fn tool_timeout(requested: Option<u64>) -> Duration {
+    Duration::from_secs(
+        requested
+            .unwrap_or(DEFAULT_TOOL_TIMEOUT_SECONDS)
+            .clamp(MIN_TOOL_TIMEOUT_SECONDS, MAX_TOOL_TIMEOUT_SECONDS),
+    )
+}
+
 /// What can go wrong while speaking to the core.
 #[derive(Debug)]
 pub enum SessionError {
@@ -427,6 +454,21 @@ mod tests {
 
     /// How long the end-to-end test allows for each protocol step.
     const STEP_TIMEOUT: Duration = Duration::from_secs(20);
+
+    #[test]
+    fn the_tool_timeout_defaults_and_clamps() {
+        // The webview supplies this value from a settings field a human typed, so
+        // both ends of the range are real: too small and even `tools/list` cannot
+        // finish, too large and a wedged core holds the session for ever. `None`
+        // must mean "no preference", never "no timeout".
+        let seconds = |requested| tool_timeout(requested).as_secs();
+
+        assert_eq!(seconds(None), DEFAULT_TOOL_TIMEOUT_SECONDS);
+        assert_eq!(seconds(Some(120)), 120);
+        assert_eq!(seconds(Some(0)), MIN_TOOL_TIMEOUT_SECONDS);
+        assert_eq!(seconds(Some(1)), MIN_TOOL_TIMEOUT_SECONDS);
+        assert_eq!(seconds(Some(u64::MAX)), MAX_TOOL_TIMEOUT_SECONDS);
+    }
 
     #[test]
     fn a_serialised_message_is_exactly_one_line() {

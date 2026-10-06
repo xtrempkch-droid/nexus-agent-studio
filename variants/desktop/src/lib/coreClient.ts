@@ -53,8 +53,8 @@ function asNumber(value: unknown): number {
 }
 
 /** Call a tool whose success payload is JSON and whose failure payload is prose. */
-async function callJsonTool<T>(tool: string, args: object): Promise<T> {
-  const result = await callCoreTool<ToolResult>(tool, args);
+async function callJsonTool<T>(tool: string, args: object, timeoutSeconds?: number): Promise<T> {
+  const result = await callCoreTool<ToolResult>(tool, args, timeoutSeconds);
   const text = result.content?.[0]?.text ?? '';
 
   if (result.isError === true) {
@@ -155,11 +155,28 @@ export interface AskAgentInput {
   readonly pendingTool?: string;
   readonly pendingArguments?: unknown;
   readonly decision?: 'approve' | 'reject';
+  /**
+   * How long the shell may wait for this turn, in seconds.
+   *
+   * The whole turn is one tool call, so this is the model's time budget: a local
+   * model on CPU can need far more than the shell's default ten minutes, and the
+   * user is the only one who knows how slow theirs is.
+   */
+  readonly timeoutSeconds?: number;
+  /**
+   * How many model round-trips the turn may use.
+   *
+   * The other half of "the agent stopped before finishing": each step is one tool
+   * call, so a task that writes several files needs at least one step per file
+   * plus the planning round trip that asks for them.
+   */
+  readonly maxSteps?: number;
 }
 
 /** Ask the agent to perform a task, using the selected provider and model. */
 export function askAgent(input: AskAgentInput): Promise<AgentTurnResult> {
-  return callJsonTool<AgentTurnResult>('ask_agent', input);
+  const { timeoutSeconds, ...args } = input;
+  return callJsonTool<AgentTurnResult>('ask_agent', args, timeoutSeconds);
 }
 
 /** What a sandboxed command produced. */
