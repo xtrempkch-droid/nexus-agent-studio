@@ -7,9 +7,11 @@ name: bootstrap-lockfile
 # GitHub é o lugar certo para produzi-lo. `--package-lock-only` resolve a árvore
 # de dependências e escreve apenas o lockfile, sem instalar nada.
 #
-# Depois de commitar o artefato como `package-lock.json`:
-#   1. em build.yml, volte o passo de install para `npm ci`;
-#   2. reative `cache: npm` no actions/setup-node.
+# O `package-lock.json` **já está commitado** na raiz: foi gerado por este
+# workflow e o `build.yml` já usa `npm ci` + `cache: npm`.
+#
+# Use este workflow de novo apenas para **atualizar** o lockfile depois de mexer
+# nas dependências do `package.json`.
 on:
   workflow_dispatch:
 

@@ -54,7 +54,7 @@ nem a UI a um backend (falta a ponte IPC). Compilar não é o mesmo que funciona
 | # | Bloqueio | Estado / resolução |
 | --- | --- | --- |
 | 1 | Sem Node/npm na máquina local | **Contornado.** O GitHub é o ambiente de build — os runners têm Node. Veja §4. |
-| 2 | `package-lock.json` ausente → `npm ci` e `cache: npm` falhariam no CI | Mitigado: o `build.yml` cai para `npm install` e não pede cache. Gere o lockfile com o workflow `bootstrap-lockfile` e **volte a usar `npm ci` + `cache: npm`**. |
+| 2 | `package-lock.json` ausente → `npm ci` e `cache: npm` falhariam no CI | ✅ **RESOLVIDO.** O lockfile foi gerado pelo workflow `bootstrap-lockfile`, **validado contra o `package.json`** e commitado na raiz. O `build.yml` voltou para `npm ci` + `cache: npm`. O arquivo tem 239 entradas, `lockfileVersion: 3`, e `dependencies`/`devDependencies` batem **exatamente** com o manifesto. `typescript` resolveu em **6.0.3** — dentro da faixa `~6.0.2` e do peer `>=4.8.4 <6.1.0` do `typescript-eslint@8.71.1`. |
 | 3 | `git push` requer credenciais | ✅ **RESOLVIDO.** HTTPS não tinha credencial, mas a chave `~/.ssh/id_ed25519` já está autorizada na conta. O remote `origin` foi apontado para SSH: `git@github.com:xtrempkch-droid/nexus-agent-studio.git`. |
 | 4 | A UI desktop é uma **simulação** no browser | Falta a ponte IPC (Electron/Tauri) entre `variants/desktop` e `common/`. Ver §5. |
 | 5 | `npm install` falhava no CI (run #34, os 6 jobs) | ✅ **RESOLVIDO e confirmado.** Causa: `typescript-eslint@8.71.1` declara `peerDependencies.typescript: ">=4.8.4 <6.1.0"` e eu havia declarado `typescript ^7.0.2` → `ERESOLVE`, exit 1 no passo de install, com `lint`/`typecheck`/`test`/`build` **skipped**. Agora `typescript: "~6.0.2"` e o install passa. |
@@ -67,13 +67,16 @@ nem a UI a um backend (falta a ponte IPC). Compilar não é o mesmo que funciona
 1. ✅ **Feito.** O projeto foi enviado para `main` (`git push origin main`).
 2. O workflow **`build`** roda automaticamente em `push`/`pull_request` para `main`,
    na matriz `ubuntu / windows / macos` × `node 22 / 24`, executando:
-   `lint → typecheck → test → build`. Esta é a **primeira execução real do
-   TypeScript** contra os tipos do SDK — espere encontrar algo para corrigir.
+   `npm ci → lint → typecheck → test → build`.
    Acompanhe em: <https://github.com/xtrempkch-droid/nexus-agent-studio/actions>.
-3. Para gerar o lockfile sem Node local: **Actions → bootstrap-lockfile → Run workflow**.
-   Baixe o artefato `package-lock` e commite como `package-lock.json`.
-4. Depois disso, no `build.yml`: troque o passo de install por `npm ci` e
-   reative `cache: npm`.
+3. ✅ **Lockfile no lugar.** O `package-lock.json` está commitado na raiz e o
+   `build.yml` usa `npm ci` + `cache: npm`.
+4. Para **atualizar** o lockfile depois de mexer nas dependências (o ambiente local
+   não tem Node): **Actions → bootstrap-lockfile → Run workflow**. O download é um
+   `.zip` — extraia e coloque o `package-lock.json` na **raiz do repo** (a mesma pasta
+   do `package.json`; **nunca** em `.github/`). Antes de commitar, confira que
+   `dependencies`/`devDependencies` do lockfile batem com o `package.json`, senão você
+   fixa um lockfile defasado.
 
 Verificação local (quando houver Node ≥ 22):
 
@@ -88,7 +91,7 @@ node dist/core.mjs      # core como MCP server stdio
 
 1. ✅ **Pipeline verde no run 37402844523** — os 6 jobs (ubuntu / windows / macos ×
    node 22 / 24) passaram em `lint`, `typecheck`, `test` e `build`. Não há erro
-   pendente no CI. **O único item aberto que exige ação humana é o passo 4.**
+   pendente no CI.
 2. ✅ **Risco descartado com evidência — não reabra esta investigação.** Em
    `common/mcp/server.ts`, `build()` passa `inputSchema: tool.definition.inputSchema`
    (tipado como `z.ZodType`) para `McpServer.registerTool`, cuja assinatura v2 aceita
@@ -102,12 +105,10 @@ node dist/core.mjs      # core como MCP server stdio
    **sai com código 1**, então o sucesso prova que os 8 arquivos foram encontrados e
    passaram. O CI, porém, não publica a contagem de testes — para vê-la, rode
    `npm run test` localmente.
-4. **Pendência que exige ação humana:** gerar o `package-lock.json` e endurecer o CI de
-   volta (`npm ci` + `cache: npm`). Duas formas: (a) **Actions → bootstrap-lockfile →
-   Run workflow**, baixar o artefato `package-lock` e commitá-lo; ou (b) rodar
-   `npm install` numa máquina com Node ≥ 22 e commitar o lockfile gerado. Baixar
-   artefato do Actions **exige autenticação**, por isso este passo não pode ser
-   concluído de dentro deste ambiente.
+4. ✅ **Lockfile commitado e CI endurecido** (`npm ci` + `cache: npm` de volta). O
+   artefato veio do workflow `bootstrap-lockfile`, foi extraído, **validado contra o
+   `package.json`** e só então commitado — commitar um lockfile defasado quebraria o
+   `npm ci` justamente no passo que se queria endurecer.
 5. Construir a ponte IPC (`variants/desktop` ↔ `common/`) — hoje a UI roda uma
    simulação determinística marcada em `variants/desktop/src/App.tsx`.
 6. Avaliar se o Monaco volta a ser usado (foi trocado por `<textarea>` para não

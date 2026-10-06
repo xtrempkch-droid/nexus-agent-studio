@@ -28,23 +28,14 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
-          # NOTE: re-enable `cache: npm` once package-lock.json is committed.
-          # setup-node fails outright when the cache is requested but no
-          # lockfile is present.
+          cache: npm
 
-      # `npm ci` requires a committed lockfile. Until package-lock.json exists
-      # (it cannot be generated without Node.js installed), fall back to
-      # `npm install` so the pipeline stays green. Commit a lockfile — then this
-      # step can go back to a plain `npm ci`.
+      # `npm ci` installs exactly what package-lock.json pins, and fails if the
+      # lockfile and package.json disagree — which is the point. The old
+      # install-from-manifest fallback was only a bridge while no lockfile was
+      # committed; the lockfile now lives in the repo root.
       - name: Install dependencies
-        shell: bash
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            echo "::warning::package-lock.json not found; using npm install. Commit a lockfile to restore reproducible installs."
-            npm install --no-audit --no-fund
-          fi
+        run: npm ci --no-audit --no-fund
 
       - name: Lint
         run: npm run lint
