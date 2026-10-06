@@ -67,9 +67,10 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 | 7 | `npm run typecheck`: falta de declaração de módulo (run 37402173198) | ✅ **CORRIGIDO.** `variants/desktop/src/main.tsx:10` → `Cannot find module or type declarations for side-effect import of './styles/theme.css'`. Causa: **não existia nenhum `.d.ts` no projeto**, então o import de CSS não resolvia. Criado `variants/desktop/src/vite-env.d.ts` com `/// <reference types="vite/client" />` — o `client.d.ts` do Vite declara `declare module '*.css' {}` (verificado em `vite@8.3.2`, cujo `package.json` expõe `exports["./client"] = { types: "./client.d.ts" }`). `.d.ts` é ignorado pelo ESLint, então a triple-slash reference não viola nenhuma regra. |
 | 8 | `npm run typecheck`: 5 erros em `common/mcp/server.test.ts` | ✅ **CORRIGIDO.** Linhas 87/92/96/111/116, todos a mesma causa: os dois `const handler` extraídos perdiam a **tipagem contextual**, então `type: 'text'` **alargava para `string`** e o retorno deixava de ser atribuível a `TextContentBlock`. Os arrows inline (linhas 25/63/75) **não** erravam — prova de que a causa era o literal solto, não a API. Corrigido usando o helper `textResult` que já era exportado. **Os tipos da lib estavam corretos; o teste é que estava.** |
 | 9 | `build()` e `serveStdio()` sem cobertura de runtime | ✅ **RESOLVIDO.** Nenhum dos 8 arquivos de teste chamava `build()` nem `serveStdio()` — as duas apareciam apenas no bootstrap (`common/index.ts`) e em comentários. Ou seja, a fronteira com o SDK v2, a parte mais arriscada do projeto, **nunca havia executado**: o typecheck provava só que os tipos encaixam, não que o SDK converte os schemas Zod em runtime. Criado `scripts/smoke-mcp.ts` + o passo `Smoke test (MCP over stdio)` no CI (depois do build, pois sobe `dist/core.mjs`). Run 37404728248: verde nos 6 jobs, inclusive Windows. |
-| 10 | A UI nunca era empacotada pelo Vite | ✅ **CORRIGIDO no código.** `npm run build:desktop` não rodava em lugar nenhum: o `tsc` aprovava a UI, mas aprovar tipos não diz nada sobre o Vite resolver `@tailwindcss/vite`, `@vitejs/plugin-react`, o `@theme` do Tailwind v4 e o alias `@core`. Adicionado o passo `Build (desktop)` (commit `29b9e0a`). **Resultado do run ainda não conferido** — a API do GitHub estourou o limite de 60 req/h sem autenticação, e o badge público não expôs o status. |
-| 11 | O host desktop não existia (ponte IPC sem lugar para viver) | 🟡 **HOSPEDEIRO PRONTO, ponte pendente.** Criado `src-tauri/` (`Cargo.toml`, `tauri.conf.json`, `capabilities/default.json`, ícone, um único comando `shell_info`) sob um workflow `tauri` **separado**, que roda `cargo check` só quando `src-tauri/**` ou `variants/desktop/**` mudam — compilar Tauri leva minutos e não deve travar o loop rápido do TypeScript. O passo captura a saída do cargo e a reemite como `::error::`, porque log bruto do Actions exige autenticação e anotação não: sem isso, uma falha do Rust seria só um X vermelho. Run do commit `641fa13`: **`cargo check` verde**. Run de `fb2cff6`: **`cargo check` e `cargo test` verdes**. |
+| 10 | A UI nunca era empacotada pelo Vite | ✅ **CORRIGIDO no código.** `npm run build:desktop` não rodava em lugar nenhum: o `tsc` aprovava a UI, mas aprovar tipos não diz nada sobre o Vite resolver `@tailwindcss/vite`, `@vitejs/plugin-react`, o `@theme` do Tailwind v4 e o alias `@core`. Adicionado o passo `Build (desktop)` (commit `29b9e0a`). **Confirmado verde** no run do commit `641fa13`: o Vite resolve os plugins, o `@theme` do Tailwind v4 e o alias `@core`. |
+| 11 | O host desktop não existia (ponte IPC sem lugar para viver) | ✅ **RESOLVIDO.** Criado `src-tauri/` (`Cargo.toml`, `tauri.conf.json`, `capabilities/default.json`, ícone, um único comando `shell_info`) sob um workflow `tauri` **separado**, que roda `cargo check` só quando `src-tauri/**` ou `variants/desktop/**` mudam — compilar Tauri leva minutos e não deve travar o loop rápido do TypeScript. O passo captura a saída do cargo e a reemite como `::error::`, porque log bruto do Actions exige autenticação e anotação não: sem isso, uma falha do Rust seria só um X vermelho. Run do commit `641fa13`: **`cargo check` verde**. Run de `fb2cff6`: **`cargo check` e `cargo test` verdes**. |
 | 12 | **Eu inventei três métodos de API do Rust** | ✅ **CORRIGIDO e confirmado verde — leia isto antes de escrever Rust aqui.** Usei `command.get_stdin()`, `get_stdout()` e `get_stderr()` afirmando que existiam desde o Rust 1.57. Existem `get_program`, `get_args` e `get_current_dir` — mas **os três getters de stream não existem**. O CI apontou `error[E0599]` nas três linhas. É exatamente o erro que a regra nº 1 do `AGENTS.md` existe para pegar, e eu caí nele por confiar na memória em vez de conferir. Substituído por testes **comportamentais** (sobem `printf`/`sh` de verdade e leem stdout/stdin/stderr), que provam **mais** do que introspecção provaria. O canal de `::error::` no workflow `tauri` foi o que tornou isso diagnosticável sem acesso ao log bruto. |
+| 13 | O Rust não falava MCP | ✅ **RESOLVIDO e confirmado.** `src-tauri/src/mcp.rs` implementa `initialize` + `notifications/initialized` + `tools/list` sobre JSON-RPC delimitado por linha, com loop de leitura por `id` (pulando notificações no canal compartilhado), timeout por passo e shutdown fechando o `stdin` primeiro (o sinal gracioso portável da spec). O teste end-to-end sobe o core **real** e afirma as 5 tools; CI verde. **Fato medido, não suposto:** a anotação `::notice::` reportou `negotiated protocol 2025-11-25, 5 tools`. O core **não aceita** `2026-07-28` no handshake legado — ele negocia para **2025-11-25**. Se eu tivesse *afirmado* a versão em vez de *pedi-la*, o teste teria falhado **com o handshake funcionando**. Corolário: para usar recursos da era 2026-07-28 é preciso o fluxo moderno (`server/discover` + metadados em `_meta`), porque a era moderna **não tem** handshake `initialize` para negociar. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
@@ -122,18 +123,17 @@ node dist/core.mjs      # core como MCP server stdio
    `npm ci` justamente no passo que se queria endurecer.
 5. ✅ **`Build (desktop)` no CI** (commit `29b9e0a`): o Vite agora empacota a UI de
    verdade. Resultado do run ainda não conferido (§3, linha 10).
-6. 🟡 **Sidecar começado e verificado; falar MCP completo é o próximo passo.** O
-   `src-tauri/src/bridge.rs` já **sobe** `node dist/core.mjs` e espera a linha de boot no
-   `stderr` (`spawn_core` + `wait_for_boot`), com `shell_info` e `core_boot_probe` expostos
-   como comandos. Run de `fb2cff6`: `cargo check` e `cargo test` **verdes**, incluindo os
-   testes que sobem `printf`/`sh` de verdade e leem stdin/stdout/stderr — logo o
-   encanamento de processo está provado, não só compilado.
+6. 🟡 **O sidecar fala MCP; falta a sessão longa e a era moderna.** O
+   `src-tauri/src/mcp.rs` conversa de verdade com o core: `initialize`,
+   `notifications/initialized` e `tools/list`, com o teste end-to-end subindo o core real
+   (CI verde, anotação reportando `2025-11-25`, 5 tools).
 
-   **O que ainda falta:** o Rust **não fala MCP** — ele não envia `initialize` nem lê
-   `tools/list` do filho. O `core_boot_probe` prova que o processo sobe; provar que a
-   conversa funciona exige JSON-RPC delimitado por linha sobre o stdin/stdout do filho, que
-   é a fatia de complexidade real. Depois disso, trocar a simulação de
-   `variants/desktop/src/App.tsx` por chamadas reais ao shell.
+   **O que ainda falta:** (a) cada comando abre e fecha um core — a **sessão longa**
+   (um processo só, reutilizado) é o próximo passo; (b) a **era moderna** da spec
+   2026-07-28, que exige o probe `server/discover` e metadados por requisição em `_meta`
+   — quando ela for implementada, respeite a regra: cair para o `initialize` em
+   **qualquer** erro não reconhecido, nunca em um código específico; (c) trocar a
+   simulação de `variants/desktop/src/App.tsx` por chamadas reais ao shell.
 
    Decisão registrada: **sidecar** (não reimplementar o core em Rust), preservando o
    `common/` headless. O custo é exigir um runtime Node na máquina, ou empacotar um.
