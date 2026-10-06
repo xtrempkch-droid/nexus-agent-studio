@@ -5,16 +5,20 @@
  * and the agent chat panel, reproducing the `layout/` reference inside a real
  * React + Tailwind v4 build.
  *
- * NOTE ON WIRING: in the browser build the agent runs a deterministic
- * simulation. In the packaged desktop app the same handlers talk to the headless
- * core (`common/`) over the Electron/Tauri IPC bridge; the UI contracts here are
- * already the ones that bridge will satisfy.
+ * NOTE ON WIRING: the core connection is **real**. `lib/shell.ts` reaches the
+ * Tauri shell, and inside the packaged app the header badge reports what the
+ * core actually negotiated rather than a hardcoded label; in a plain browser it
+ * keeps saying "Simulação", because nothing was injected and pretending
+ * otherwise would be a lie. The agent handlers further down are still a
+ * deterministic simulation — moving them onto `callCoreTool` is the next step,
+ * and until then this screen is part simulation on purpose.
  *
  * @module variants/desktop/src/App
  */
 
-import { useCallback, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { InlineHint } from './lib/coreTypes.ts';
+import { describeCore, isShellAvailable } from './lib/shell.ts';
 import { AgentChat, type ChatMessage, type PendingApproval } from './components/AgentChat.tsx';
 import {
   FileExplorer,
@@ -183,6 +187,42 @@ export default function App() {
     setActiveFile(path);
     setOpenTabs((previous) => (previous.includes(path) ? previous : [...previous, path]));
   }, []);
+
+  // Connect to the real core when running inside the desktop shell.
+  //
+  // In a plain browser nothing is injected, so the badge keeps saying
+  // "Simulação" and the app stays honest about what it is. Inside the shell the
+  // badge reports what the core actually negotiated instead of a hardcoded
+  // string, which is the difference between a demo and a connected app.
+  useEffect(() => {
+    if (!isShellAvailable()) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    describeCore()
+      .then((description) => {
+        if (cancelled) {
+          return;
+        }
+        setConnectionLabel('Core conectado');
+        setConnectionDotClass('bg-emerald-400');
+        appendTerminal(line('system', `Core: ${description}`));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setConnectionLabel('Core indisponível');
+        setConnectionDotClass('bg-red-500');
+        appendTerminal(line('stderr', `Falha ao falar com o core: ${String(error)}`));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appendTerminal]);
 
   const runPytest = useCallback(() => {
     setSandboxStatus('executing');

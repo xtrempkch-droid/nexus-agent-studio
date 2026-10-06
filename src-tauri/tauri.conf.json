@@ -9,6 +9,7 @@
     "beforeBuildCommand": "npm run build:desktop"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
