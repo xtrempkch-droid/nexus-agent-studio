@@ -22,9 +22,13 @@ name: desktop-binary
 # A third-party prerequisite remains and is not papered over: a Tauri window on
 # Linux needs WebKitGTK at run time, which no amount of bundling can supply.
 #
-# Also runs on push when the shell or the UI changes, so the artifact stays
-# current without anyone having to remember to trigger it. Drop that trigger if
-# the build time becomes annoying; `workflow_dispatch` still works.
+# Also runs on push when the shell, the UI or the core changes, so the artifact
+# stays current without anyone having to remember to trigger it. `common/**` is
+# in that list because `dist/core.mjs` is built from it: without it the bundle
+# would keep shipping a stale core, which is exactly the kind of staleness that
+# looks like a bug in the app. Likewise `package.json` and `tsconfig.json`,
+# which decide how that core is built. Drop the trigger if the build time becomes
+# annoying; `workflow_dispatch` still works.
 on:
   workflow_dispatch:
   push:
@@ -32,6 +36,10 @@ on:
     paths:
       - 'src-tauri/**'
       - 'variants/desktop/**'
+      - 'common/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
       - '.github/workflows/desktop-binary.yml'
 
 permissions:

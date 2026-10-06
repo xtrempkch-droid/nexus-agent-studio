@@ -2,20 +2,29 @@ name: tauri
 
 # Separate from `build` on purpose. Compiling a Tauri app pulls hundreds of Rust
 # crates and takes minutes; the `build` workflow is the fast feedback loop for
-# the TypeScript core and should not wait on it. This one only runs when the
-# shell, the frontend it embeds, or this file change.
+# the TypeScript core and should not wait on it. This one runs when the shell, the
+# frontend it embeds, the core it spawns, or this file change.
+#
+# `common/**` is in that list for a specific reason: the end-to-end test below
+# spawns the real core that this hand-written Rust client talks to, and it is the
+# only test that would notice a core change breaking that client — the TypeScript
+# smoke test in `build.yml` drives the core with the official client, which cannot
+# fail that way. The cost is a slow job on core changes; the alternative is a
+# blind spot on the one boundary with no SDK underneath it.
 on:
   push:
     branches: [main]
     paths:
       - 'src-tauri/**'
       - 'variants/desktop/**'
+      - 'common/**'
       - '.github/workflows/tauri.yml'
   pull_request:
     branches: [main]
     paths:
       - 'src-tauri/**'
       - 'variants/desktop/**'
+      - 'common/**'
       - '.github/workflows/tauri.yml'
   workflow_dispatch:
 
