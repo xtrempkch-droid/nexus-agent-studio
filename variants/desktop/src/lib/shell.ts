@@ -74,9 +74,6 @@ export function workspaceInfo(): Promise<string> {
  * outcome to inspect rather than an exception to catch. Only a broken exchange
  * rejects.
  */
-export function callCoreTool<T = unknown>(
-  tool: string,
-  args: Record<string, unknown> = {},
-): Promise<T> {
+export function callCoreTool<T = unknown>(tool: string, args: object = {}): Promise<T> {
   return invokeShell<T>('call_core_tool', { tool, arguments: args });
 }

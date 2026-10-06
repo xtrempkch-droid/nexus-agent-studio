@@ -52,7 +52,7 @@ function asNumber(value: unknown): number {
 }
 
 /** Call a tool whose success payload is JSON and whose failure payload is prose. */
-async function callJsonTool<T>(tool: string, args: Record<string, unknown>): Promise<T> {
+async function callJsonTool<T>(tool: string, args: object): Promise<T> {
   const result = await callCoreTool<ToolResult>(tool, args);
   const text = result.content?.[0]?.text ?? '';
 
