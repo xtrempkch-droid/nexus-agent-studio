@@ -45,7 +45,15 @@ export function shellArgv(command: string, platform: NodeJS.Platform = process.p
 
 /** Runs commands directly on the host, with no isolation whatsoever. */
 export class LocalRunner {
-  public constructor(private readonly executor: CommandExecutor = defaultCommandExecutor) {}
+  /**
+   * @param executor - Process runner; defaults to {@link defaultCommandExecutor}.
+   * @param platform - Which shell to build; injectable so the argv can be
+   * asserted for either platform from either CI runner.
+   */
+  public constructor(
+    private readonly executor: CommandExecutor = defaultCommandExecutor,
+    private readonly platform: NodeJS.Platform = process.platform,
+  ) {}
 
   /**
    * Run `options.command` in `options.workspaceDir`.
@@ -57,7 +65,7 @@ export class LocalRunner {
   public async run(options: DockerRunOptions): Promise<DockerRunResult> {
     const startedAt = Date.now();
     const result = await this.executor({
-      argv: shellArgv(options.command),
+      argv: shellArgv(options.command, this.platform),
       timeoutMs: options.timeoutMs ?? 120_000,
       cwd: options.workspaceDir,
     });

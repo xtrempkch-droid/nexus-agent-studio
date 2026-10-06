@@ -52,7 +52,22 @@ describe('LocalRunner', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.cwd).toBe('/home/dev/project');
-    expect(calls[0]?.argv).toEqual(['sh', '-lc', 'ls']);
+    // Compared against the helper rather than a literal: the shell differs by
+    // platform, and asserting the literal here made the suite pass on Linux and
+    // fail on Windows, which is a test bug and not a product one.
+    expect(calls[0]?.argv).toEqual(shellArgv('ls'));
+  });
+
+  it('builds the argv for the injected platform', async () => {
+    const { calls, executor } = recordingExecutor();
+
+    await new LocalRunner(executor, 'win32').run({
+      image: 'x',
+      command: 'dir',
+      workspaceDir: '/ws',
+    });
+
+    expect(calls[0]?.argv).toEqual(['cmd.exe', '/d', '/s', '/c', 'dir']);
   });
 
   it('labels every result as unisolated', async () => {
