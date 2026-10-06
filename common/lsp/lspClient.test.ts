@@ -9,6 +9,7 @@
  * @module common/lsp/lspClient.test
  */
 
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { LspClient, LspRequestError, type LspTransport } from './lspClient.ts';
 
@@ -160,7 +161,10 @@ describe('LspClient.initialize', () => {
 
     const pending = client.initialize({ rootPath: '/ws' });
     const sent = transport.sent[0] as { id: number; params: { rootUri: string } };
-    expect(sent.params.rootUri).toBe('file:///ws');
+    // Compare against `pathToFileURL` itself rather than a hardcoded string:
+    // on Windows a root like `/ws` becomes `file:///D:/ws`, so a literal would
+    // only pass on Unix.
+    expect(sent.params.rootUri).toBe(pathToFileURL('/ws').href);
 
     transport.deliver({ jsonrpc: '2.0', id: sent.id, result: { capabilities: {} } });
     await pending;

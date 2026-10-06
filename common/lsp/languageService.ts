@@ -14,6 +14,7 @@
  * @module common/lsp/languageService
  */
 
+import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { InlineHintManager } from '../debug/hints.ts';
 import { toInlineHints, type LspPosition } from './diagnostics.ts';
@@ -177,7 +178,10 @@ export class LanguageService {
   }
 
   private uriFor(path: string): string {
-    const absolute = path.startsWith('/') ? path : `${this.workspaceRoot}/${path}`;
+    // `isAbsolute`/`join` rather than a `startsWith('/')` check: an absolute
+    // Windows path (`C:\…`) does not start with a slash, and `join` normalises
+    // separators for the platform.
+    const absolute = isAbsolute(path) ? path : join(this.workspaceRoot, path);
     return pathToFileURL(absolute).href;
   }
 
