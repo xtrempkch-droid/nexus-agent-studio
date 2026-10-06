@@ -31,6 +31,8 @@ export interface HeaderBarProps {
   readonly onOpenSettings: () => void;
   /** Open the native folder picker to choose another project. */
   readonly onOpenWorkspace: () => void;
+  /** Open the native file picker to open a single file. */
+  readonly onOpenFile: () => void;
   /** Refresh and show diagnostics for the active file. */
   readonly onCheckDiagnostics: () => void;
 }
@@ -52,6 +54,7 @@ export function HeaderBar({
   connectionDotClass,
   onOpenSettings,
   onOpenWorkspace,
+  onOpenFile,
   onCheckDiagnostics,
 }: HeaderBarProps) {
   return (
@@ -82,11 +85,21 @@ export function HeaderBar({
         <button
           type="button"
           onClick={onOpenWorkspace}
-          title="Abrir projeto"
+          title="Abrir pasta (projeto)"
           className="flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900/80 px-2 py-1 font-mono text-[11px] text-slate-300 transition-colors hover:border-indigo-500/50 hover:text-indigo-300"
         >
           <Icon name="folder-open" className="h-3.5 w-3.5" />
-          <span>Abrir</span>
+          <span>Pasta</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenFile}
+          title="Abrir arquivo"
+          className="flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900/80 px-2 py-1 font-mono text-[11px] text-slate-300 transition-colors hover:border-indigo-500/50 hover:text-indigo-300"
+        >
+          <Icon name="file-code" className="h-3.5 w-3.5" />
+          <span>Arquivo</span>
         </button>
 
         <button

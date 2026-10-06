@@ -7,6 +7,7 @@
  * @module variants/desktop/src/components/FileExplorer
  */
 
+import { useState, type KeyboardEvent } from 'react';
 import type { InlineHint } from '../lib/coreTypes.ts';
 import type { DirectoryEntry } from '../lib/coreClient.ts';
 import { Icon, type IconName } from './Icon.tsx';
@@ -31,7 +32,8 @@ export interface FileExplorerProps {
   readonly onOpenFile: (path: string) => void;
   readonly onOpenDirectory: (path: string) => void;
   readonly onNavigateUp: () => void;
-  readonly onNewFile: () => void;
+  /** Create a file (named by the user) in the directory being shown. */
+  readonly onNewFile: (name: string) => void;
   readonly onRefresh: () => void;
   /** Open the native folder picker to choose another project. */
   readonly onOpenWorkspace: () => void;
@@ -111,6 +113,28 @@ export function FileExplorer({
   onRefresh,
   onOpenWorkspace,
 }: FileExplorerProps) {
+  const [creating, setCreating] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
+
+  const submitNewFile = (): void => {
+    const name = newFileName.trim();
+    setCreating(false);
+    setNewFileName('');
+    if (name !== '') {
+      onNewFile(name);
+    }
+  };
+
+  const onNewFileKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      submitNewFile();
+    } else if (event.key === 'Escape') {
+      setCreating(false);
+      setNewFileName('');
+    }
+  };
+
   const errorCounts = new Map<string, number>();
   const warningCounts = new Map<string, number>();
 
@@ -137,7 +161,7 @@ export function FileExplorer({
           </button>
           <button
             type="button"
-            onClick={onNewFile}
+            onClick={() => setCreating((previous) => !previous)}
             title="Novo arquivo"
             className="rounded p-1 transition-colors hover:text-slate-200"
           >
@@ -191,6 +215,22 @@ export function FileExplorer({
             );
           })}
         </div>
+
+        {creating && (
+          <div className="px-3 py-1">
+            <input
+              autoFocus
+              value={newFileName}
+              onChange={(event) => setNewFileName(event.target.value)}
+              onKeyDown={onNewFileKeyDown}
+              onBlur={submitNewFile}
+              placeholder="nome-do-arquivo.ts"
+              spellCheck={false}
+              autoComplete="off"
+              className="w-full rounded border border-indigo-500/60 bg-slate-950 px-2 py-1 font-mono text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+            />
+          </div>
+        )}
 
         {entries.length === 0 ? (
           <div className="px-3 py-4 font-sans text-[11px] text-slate-500">Pasta vazia.</div>

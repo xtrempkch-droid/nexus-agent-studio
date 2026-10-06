@@ -111,6 +111,17 @@ export function setWorkspace(path: string): Promise<string> {
 }
 
 /**
+ * Open the native file picker and open the chosen file.
+ *
+ * The editor edits a project directory, so the shell switches the workspace to
+ * the file's parent and returns `[workspace, file]` (the file is relative to
+ * that workspace). Resolves to `null` when the dialog was cancelled.
+ */
+export function pickFile(): Promise<[string, string] | null> {
+  return invokeShell<[string, string] | null>('pick_file');
+}
+
+/**
  * Subscribe to agent progress events streamed from the core.
  *
  * The core emits `notifications/agent/stream` while `ask_agent` runs; the shell

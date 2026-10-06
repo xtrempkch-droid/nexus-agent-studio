@@ -97,6 +97,21 @@ export function AgentChat({
 }: AgentChatProps) {
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Seconds since the turn started. A local model on CPU can take a while, and
+  // without a counter the wait is indistinguishable from a freeze.
+  const [waitSeconds, setWaitSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!busy) {
+      setWaitSeconds(0);
+      return undefined;
+    }
+    const started = Date.now();
+    const timer = setInterval(() => {
+      setWaitSeconds(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -189,6 +204,12 @@ export function AgentChat({
       </div>
 
       <div className="border-t border-slate-800/80 bg-slate-900/50 p-3">
+        {busy && (
+          <div className="mb-2 flex items-center gap-2 rounded border border-indigo-500/30 bg-indigo-500/10 px-2 py-1 font-mono text-[10px] text-indigo-300">
+            <Icon name="loader" className="h-3 w-3 animate-spin" />
+            <span>Aguardando o modelo responder… {waitSeconds}s</span>
+          </div>
+        )}
         <form onSubmit={submit} className="relative">
           <label className="sr-only" htmlFor="agent-prompt">
             Instrução para o agente
