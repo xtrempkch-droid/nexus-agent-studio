@@ -36,6 +36,10 @@
 ## Next
 
 - [ ] LSP bridge (`variants/desktop`) using the same MCP tools
+      - [x] Core LSP client (`common/lsp/`) — framing, diagnostics→hints, JSON-RPC
+            client, stdio transport, document lifecycle
+      - [ ] Expose `get_diagnostics` as an MCP tool
+      - [ ] UI wiring (Tauri commands to configure/start the language server)
 - [ ] WASM compile target for `common/` (requires DOM-free audit)
 - [ ] Plugin marketplace with signature verification (`*.plg` signed bundles)
 - [ ] Remote MCP over Streamable HTTP for team workspaces

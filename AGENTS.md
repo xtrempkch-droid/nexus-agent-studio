@@ -83,6 +83,11 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   alcança o shell (comandos Tauri + eventos). `lib/coreClient.ts` desembrulha o
   envelope das tools. Nenhum outro componente importa `window.__TAURI__`
   diretamente.
+- `common/lsp/` é a ponte LSP: protocolo **agnóstico de transporte** (`LspClient`
+  recebe um `LspTransport`), com `stdioTransport` para o processo filho e
+  `languageService` traduzindo `publishDiagnostics` em `InlineHint`. O framing
+  (`Content-Length` em **bytes**) é a única parte que pode corromper silenciosamente
+  tudo o que vem depois — mantenha os testes de chunk dividido verdes.
 
 ## Como verificar o seu trabalho
 

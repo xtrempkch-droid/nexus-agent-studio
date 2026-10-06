@@ -22,6 +22,12 @@ export * from './mcp/tools/index.ts';
 export * from './debug/logger.ts';
 export * from './debug/hints.ts';
 
+export * from './lsp/framing.ts';
+export * from './lsp/diagnostics.ts';
+export * from './lsp/lspClient.ts';
+export * from './lsp/stdioTransport.ts';
+export * from './lsp/languageService.ts';
+
 export * from './docker/sandbox.ts';
 export * from './docker/compilerErrorParser.ts';
 
