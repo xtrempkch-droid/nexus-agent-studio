@@ -142,6 +142,18 @@ export const defaultCommandExecutor: CommandExecutor = (request) =>
   });
 
 /**
+ * The one capability the tools need from a sandbox: run a command and report
+ * what happened.
+ *
+ * Declared structurally rather than as `DockerSandbox` so an unisolated runner
+ * can be substituted — see `LocalRunner`. Anything satisfying this can be
+ * plugged in, and the tools neither know nor care which one they were given,
+ * because the **result** carries the label saying how it ran. That is what keeps
+ * the substitution honest instead of silent.
+ */
+export type Sandbox = Pick<DockerSandbox, 'run'>;
+
+/**
  * Builds and runs hardened `docker run` invocations.
  */
 export class DockerSandbox {

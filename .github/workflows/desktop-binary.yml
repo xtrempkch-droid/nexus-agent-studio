@@ -161,6 +161,22 @@ jobs:
           echo "NexusAgent Studio"
           echo "  app       : $PWD"
           echo "  workspace : $WORKSPACE"
+
+          # Isolation stays on unless it is asked for. Without Docker the
+          # sandboxed terminal cannot run anything at all, so this is the escape
+          # hatch — and it is loud, because the whole point of the sandbox is
+          # that the app never silently runs anything on your machine.
+          if [[ "${NEXUS_UNSANDBOXED:-}" == "1" || "${NEXUS_UNSANDBOXED:-}" == "true" ]]; then
+            echo
+            echo "  AVISO: NEXUS_UNSANDBOXED ligado."
+            echo "  Os comandos do terminal vao rodar DIRETO nesta maquina, sem"
+            echo "  contêiner, sem limite de rede e sem limite de recursos."
+            echo "  Cada resultado vem marcado como 'local (sem isolamento)'."
+            echo
+          else
+            echo "  sandbox   : Docker (desligado com NEXUS_UNSANDBOXED=1)"
+          fi
+
           exec env NEXUS_WORKSPACE="$WORKSPACE" ./nexus-agent-studio-shell
           RUN
           chmod +x bundle/RUN.sh bundle/nexus-agent-studio-shell

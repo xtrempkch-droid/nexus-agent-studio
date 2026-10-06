@@ -10,7 +10,8 @@
  */
 
 import { ExecutionLogger } from './debug/logger.ts';
-import { DockerSandbox } from './docker/sandbox.ts';
+import { LocalRunner } from './docker/localRunner.ts';
+import { DockerSandbox, type Sandbox } from './docker/sandbox.ts';
 import { InternalMCPServer } from './mcp/server.ts';
 import { EditorContextStore, createEditorTools } from './mcp/tools/editorTools.ts';
 import { createFileTools } from './mcp/tools/fileTools.ts';
@@ -34,7 +35,16 @@ export interface CoreOptions {
   /** Default sandbox image for `run_terminal_command`. */
   readonly sandboxImage?: string;
   /** Inject a custom sandbox (used by tests). */
-  readonly sandbox?: DockerSandbox;
+  readonly sandbox?: Sandbox;
+  /**
+   * Run terminal commands directly on the host instead of in a container.
+   *
+   * Defaults to `false`, and nothing infers it: Docker is the product's promise,
+   * and turning isolation off has to be asked for. What it changes is only
+   * *where* the command runs — every result is still labelled with
+   * `local (sem isolamento)` so the log cannot be mistaken for a sandboxed one.
+   */
+  readonly allowLocalExecution?: boolean;
   /** Initial UI theme. Defaults to the built-in dark skin. */
   readonly theme?: ThemeObject;
   /** Command timeout for the sandbox, in milliseconds. */
@@ -48,7 +58,7 @@ export interface NexusCore {
   readonly themes: ThemeManager;
   readonly editorContext: EditorContextStore;
   readonly plugins: PluginManager;
-  readonly sandbox: DockerSandbox;
+  readonly sandbox: Sandbox;
   readonly terminal: TerminalRunner;
 }
 
@@ -61,7 +71,9 @@ export function createCore(options: CoreOptions): NexusCore {
   const logger = new ExecutionLogger(options.workspaceRoot);
   const themes = new ThemeManager(options.theme ?? DARK_THEME);
   const editorContext = new EditorContextStore();
-  const sandbox = options.sandbox ?? new DockerSandbox();
+  const sandbox =
+    options.sandbox ??
+    (options.allowLocalExecution === true ? new LocalRunner() : new DockerSandbox());
 
   const server = new InternalMCPServer({
     name: options.serverName ?? 'nexus-agent-studio',

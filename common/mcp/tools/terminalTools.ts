@@ -17,7 +17,12 @@
 
 import { isAbsolute, relative, resolve } from 'node:path';
 import * as z from 'zod/v4';
-import { DockerSandbox, type DockerRunOptions, type DockerRunResult } from '../../docker/sandbox.ts';
+import {
+  DockerSandbox,
+  type DockerRunOptions,
+  type DockerRunResult,
+  type Sandbox,
+} from '../../docker/sandbox.ts';
 import {
   formatDiagnostic,
   parseCompilerErrors,
@@ -42,7 +47,7 @@ export interface TerminalToolsOptions {
   /** Logger that receives container run records. */
   readonly logger: ExecutionLogger;
   /** Sandbox instance. Defaults to one using the real Docker CLI. */
-  readonly sandbox?: DockerSandbox;
+  readonly sandbox?: Sandbox;
   /** Image used when a call omits `image`. */
   readonly defaultImage?: string;
   /** Command timeout in milliseconds. */

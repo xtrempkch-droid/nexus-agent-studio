@@ -32,14 +32,28 @@ export * from './security/pathGuard.ts';
 export * from './themes/themeManager.ts';
 
 /**
+ * Whether unsandboxed local command execution was requested.
+ *
+ * Opt-in through the environment and nowhere else. A webview must not be able to
+ * turn isolation off, and `RUN.sh` is the single place that sets this — printed
+ * next to the warning that goes with it, so the choice is never implicit.
+ */
+function allowLocalExecutionFromEnvironment(): boolean {
+  const value = process.env['NEXUS_UNSANDBOXED'];
+  return value === '1' || value === 'true';
+}
+
+/**
  * Start the core as a stdio MCP server for the current working directory.
  *
  * @returns The stdio handle, so callers can close it.
  */
 export function startStdioServer(workspaceRoot: string = process.cwd()) {
-  const core = createCore({ workspaceRoot });
+  const unsandboxed = allowLocalExecutionFromEnvironment();
+  const core = createCore({ workspaceRoot, allowLocalExecution: unsandboxed });
   console.error(
-    `[nexus] serving ${core.server.getToolNames().length} tools over stdio (root: ${workspaceRoot})`,
+    `[nexus] serving ${core.server.getToolNames().length} tools over stdio ` +
+      `(root: ${workspaceRoot})${unsandboxed ? ' [execucao local SEM ISOLAMENTO]' : ''}`,
   );
   return core;
 }
