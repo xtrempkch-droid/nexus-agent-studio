@@ -39,6 +39,7 @@ const EXPECTED_TOOLS: readonly string[] = [
   'list_models',
   'read_file',
   'run_terminal_command',
+  'set_editor_context',
   'write_file',
 ];
 
@@ -124,6 +125,36 @@ async function main(): Promise<void> {
       `get_diagnostics did not return a count; head: ${diagnosticsText.slice(0, 200)}`,
     );
     console.error('[smoke] get_diagnostics answered without a language server');
+
+    // 7. The editor-context pair: the UI writes what is on screen and the agent
+    //    reads it back. Over stdio this proves the round trip, the merge rules
+    //    and the derived language id all survive a real transport.
+    const reported = await client.callTool({
+      name: 'set_editor_context',
+      arguments: {
+        activeFile: 'src/main.ts',
+        cursor: { line: 4, column: 2 },
+        openFiles: ['src/main.ts'],
+        dirty: true,
+      },
+    });
+    assert(reported.isError !== true, 'set_editor_context reported isError');
+
+    const context = await client.callTool({ name: 'get_editor_context', arguments: {} });
+    const contextText = (context.content[0] as { text?: string } | undefined)?.text ?? '';
+    assert(
+      contextText.includes('"activeFile": "src/main.ts"'),
+      `editor context did not keep the active file; got: ${contextText.slice(0, 300)}`,
+    );
+    assert(
+      contextText.includes('"languageId": "typescript"'),
+      `editor context did not derive the language id; got: ${contextText.slice(0, 300)}`,
+    );
+    assert(
+      contextText.includes('"line": 4'),
+      `editor context lost the cursor; got: ${contextText.slice(0, 300)}`,
+    );
+    console.error('[smoke] set_editor_context -> get_editor_context round trip ok');
   } finally {
     await client.close();
   }

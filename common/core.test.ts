@@ -27,6 +27,7 @@ describe('createCore', () => {
       'list_models',
       'read_file',
       'run_terminal_command',
+      'set_editor_context',
       'write_file',
     ]);
   });
