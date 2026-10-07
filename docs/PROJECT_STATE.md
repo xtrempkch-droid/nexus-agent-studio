@@ -46,15 +46,18 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 | --- | --- | --- | --- |
 | 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` |
 | 2 | Core TypeScript (`common/`) | ✅ completo | 🟡 parcial: o servidor MCP é exercitado ponta a ponta; temas e plugins só em teste unitário |
-| 3 | Sandbox + shell | ✅ completo | ✅ `cargo check`/`cargo test` verdes; sem Docker no CI, mas há `LocalRunner` opt-in (`NEXUS_UNSANDBOXED=1`) |
+| 3 | Sandbox + shell | ✅ completo | ✅ **verificado ao vivo no notebook** (§3 item 30): roda como o usuário, `CapEff` zerado, rede bloqueada, `--rm` limpo. No CI **não** há Docker, mas existe o `LocalRunner` opt-in (`NEXUS_UNSANDBOXED=1`). O shell passou a ter **fila de requisições** (§3 item 32). |
 | 4 | Arquitetura de plugins | ✅ completo | 🟡 parcial: registro/unload cobertos por teste, mas nenhum plugin real foi carregado |
 | 5 | Configuração e build | ✅ completo | ✅ `build:desktop` roda no CI e o bundle portátil se verifica por handshake dentro de si |
-| 6 | UI desktop ligada ao core | ✅ completo | ✅ explorador, editor, terminal, configurações e agente falam com o core; janela só abre na máquina do dono (WebKitGTK) |
+| 6 | UI desktop ligada ao core | ✅ completo | ✅ explorador, editor, terminal, configurações e agente falam com o core. **A janela foi aberta e usada pelo dono**, que é como os itens 29 e 33 apareceram — o browser stubado não pegaria nenhum dos dois. |
 | 7 | Agente + aprovação passo a passo | ✅ completo | ✅ loop exercitado contra **modelos reais** (Ollama local, §5 item 19) — foi assim que apareceram os defeitos de relato e de repetição; a UI que consome o resultado segue verificada no browser |
 
 **Resumo: o pipeline está VERDE — 8 jobs** (6 de `build` × SO/Node, `cargo check`
 e o bundle `desktop-binary`). Nada mais é simulado: a UI, o agente e a aprovação
-passo a passo falam com o core de verdade.
+passo a passo falam com o core de verdade. **Duas das correções desta sessão
+(itens 29 e 33) só apareceram porque o dono abriu e usou a janela** — nenhuma
+delas era visível para o browser com o shell stubado, que é a lição registrada no
+fim do §5.
 
 > ⚠️ **AMBIENTE — re-verificado em 2026-10-07.** A nota anterior aqui afirmava que
 > "a máquina agora tem `node` 22 + `npm` 9, Rust via `rustup` e `docker`
@@ -530,12 +533,29 @@ correção do **travamento da janela** (#7, #8 — `async` + `spawn_blocking`), 
 **contexto do editor** alimentado pela UI com coalescência (#8, #9), o **sandbox
 Docker funcionando de fato** (#10 — dois bugs reais: argv sem o binário `docker` e
 container rodando como root), as **abas fecháveis + orçamento do agente** (#11) e o
-**relato honesto das falhas do turno** (#12). Nesta fatia: **`0` = esperar sem
+**relato honesto das falhas do turno** (#12). Naquela fatia: **`0` = esperar sem
 limite** no tempo do agente (item 20).
 
-**Estado:** `main` verde, 235 testes, `cargo check`/`cargo test` verdes no CI. O
-**sandbox compila e roda C de verdade**; o **agente foi exercitado contra modelos
-reais** (Ollama local) — foi assim que os defeitos dos itens 19 e 20 apareceram.
+**Sessão de 2026-10-07 (esta).** Começou sincronizando o repositório (42 commits
+atrás) e confirmando que o dono estava testando um bundle de 22 h antes — tudo que
+ele relatava já estava corrigido, provado contando as tools dentro do `.mjs` dele
+(§3 item 29). Depois: as **afirmações falsas de ambiente** nos docs foram
+corrigidas (§3 item 1); as **duas máquinas** foram separadas, com
+`docs/MACHINES.md` e `scripts/env-probe.sh`, inclusive uma **auto-verificação de
+perfil** que faz a tarefa sobreviver à sessão; o **sandbox Docker foi verificado ao
+vivo** (§3 item 30, e itens 27–28 escopados ao host onde foram vistos); o
+**harness de Rust** deu aos módulos Tauri-free um ciclo de teste local (§3 item 31);
+a **fila de requisições** removeu o mutex segurado durante a chamada (§3 item 32);
+o **`color-scheme`** corrigiu menus nativos brancos sobre branco (§3 item 33); e o
+`architecture.md`, que é a referência técnica, parou de afirmar que a UI fala
+direto com o core e que o TypeScript é 7.x.
+
+**Estado:** `main` verde, **8 jobs** (6 de `build` × SO/Node, `cargo check` e o
+bundle). TypeScript: **235 testes** no CI. Rust: **26 testes** locais no harness
+(`bridge` + `mcp` + `worker`), ~3 s. O **sandbox foi verificado ao vivo no
+notebook** (roda como o usuário, `CapEff` zerado, rede bloqueada). O **agente foi
+exercitado contra modelos reais**. A **janela foi aberta e usada pelo dono** — foi
+assim que os itens 29 e 33 apareceram.
 
 **O que falta, em ordem de valor:**
 0. ⏳ **PERFILAR A MÁQUINA A — tarefa em aberto, e a única que eu não consigo
@@ -549,20 +569,66 @@ reais** (Ollama local) — foi assim que os defeitos dos itens 19 e 20 aparecera
    build, teste e Docker rodam localmente naquela máquina ou vão para o CI.
    **Não preencher por suposição:** os campos são medições, e "a máquina tem
    suporte a tudo" é relato, não medida.
-1. **Reconstruir o `.exe` e usar o programa** — é a verificação que fecha o ciclo e a
-   única que pode revelar o que o browser stubado não revela. Todas as correções
-   estão em `main`, mas o binário que existe é anterior a elas.
-2. ✅ **Fila de requisições — FEITA** (§3 item 32). `src-tauri/src/worker.rs` tem
+1. 🎯 **CANDIDATO ESCOLHIDO — o histórico de alterações da IA é inalcançável.**
+   Achado por auditoria no fim desta sessão, não por relato: o `ExecutionLogger`
+   grava **toda** escrita de autoria da IA com `delta: { before, after }`
+   (`common/debug/logger.ts`, `LogEntry`) e expõe `getEntries()`, mas **nenhuma das
+   11 tools lê isso** — então a UI não tem como mostrar o que o agente mudou. O
+   sintoma já está na tela: a aba chama-se "Inspeção de Alterações" e mostra uma
+   **lista de nomes de ferramentas**. Plano: uma tool `get_execution_log`
+   (filtro por arquivo/autor, **com teto** — `delta` guarda arquivo inteiro, então
+   devolver tudo pode dar megabytes, e o padrão deve omitir conteúdo), superfície
+   **11 → 12** atualizando os **três** lugares que a afirmam, testes no core, e a
+   aba consumindo diffs reais (as classes `diff-added`/`diff-removed` do tema já
+   existem sem uso real). **Somente leitura.**
+2. **Reconstruir o `.exe` e usar o programa** — a verificação que fecha o ciclo.
+   O binário de `36b2166` já tem as correções; o que existe na máquina do dono pode
+   ser mais antigo (foi o item 29 uma vez).
+
+   **Roteiro de teste (o dono vai executar e voltar com o resultado).** Cada linha
+   existe porque foi um defeito real ou uma lacuna conhecida — não é exploração
+   livre:
+   - **Confirme a idade do bundle antes de tudo:** `ls -la ~/Downloads/nexus-agent-studio-linux-x64/dist/core.mjs`
+     e conte as tools (`grep -c registerTool`). Se for de antes de 2026-10-07
+     16:00, baixe de novo — metade das "regressões" some assim (§3 item 29).
+   - **Menu do provedor legível** (§3 item 33): abrir as configurações e o seletor
+     de provedor deve ter fundo escuro e texto claro. Era branco sobre branco.
+   - **Terminal executa de verdade:** `bash RUN.sh <projeto>` e um comando simples
+     (`echo oi`, `ls`). Com Docker no grupo, deve rodar em contêiner e cada
+     resultado vir com o rótulo do sandbox — **não** `local (sem isolamento)`.
+   - **Agente com modelo real:** escolher `deepseek-r1:1.5b`, pedir uma tarefa
+     pequena. O que importa é o **relato**: se não concluir, a mensagem deve dizer
+     se o tempo acabou, se estourou os passos, ou se o core recusou.
+   - **Aprovação passo a passo:** no modo Assistido, uma tarefa que escreva arquivo
+     deve **pausar** antes do `write_file`, e retomar a mesma conversa ao aprovar.
+   - **Resposta durante turno longo:** pedir algo demorado e, enquanto roda, tentar
+     abrir outro arquivo. Com a fila (§3 item 32), a UI deve responder — o que
+     **não** deve acontecer é a janela parecer travada.
+   - **O que se sabe que falta, para não ser reportado como bug:** o histórico de
+     alterações da IA ainda não aparece (item 1 abaixo), e a aba "Inspeção de
+     Alterações" mostra nomes de ferramentas em vez de diffs.
+3. ✅ **Fila de requisições — FEITA** (§3 item 32). `src-tauri/src/worker.rs` tem
    **uma thread dona da sessão**: nada é segurado durante a chamada, os pedidos são
    atendidos em ordem de submissão (FIFO), e o orçamento conta desde a submissão.
    O que **continua valendo** para quem escreve UI: o canal ainda é serializado,
    então uma tool lenta adia as seguintes — debounce e no máximo uma chamada em voo
    seguem sendo a regra. **Não** existe cancelamento: um pedido abandonado continua
    rodando no core e o próximo espera por ele.
-3. **Era moderna da spec 2026-07-28** (`server/discover` + `_meta`, §3 item 6-d).
-4. **WASM** para `common/` (exige auditoria DOM-free).
-5. Não priorizados: plugin marketplace com assinatura, MCP remoto via Streamable
+4. **Era moderna da spec 2026-07-28** (`server/discover` + `_meta`, §3 item 6-d).
+   Correção contra a spec, mas **valor de usuário próximo de zero hoje** — o
+   handshake legado funciona. Não priorizar sobre o item 1.
+5. **WASM** para `common/` (exige auditoria DOM-free). Só importa para um alvo web
+   que ainda não existe.
+6. Não priorizados: plugin marketplace com assinatura, MCP remoto via Streamable
    HTTP, integração DAP.
+
+**Lição de processo desta sessão, que vale mais que o código.** Os **três**
+defeitos reais dos itens 29, 33 e o candidato do item 1 **não estavam no roadmap**.
+Nenhum deles foi encontrado lendo o plano: o 29 veio do dono usar o app, o 33
+idem, e o item 1 veio de eu auditar o que a UI não consegue alcançar. Quando o
+roadmap está quase todo cumprido, **a fonte confiável de trabalho passa a ser usar
+o programa e seguir o que incomoda**, não escolher de uma lista — e "ver o que a IA
+mudou" aparece como o que falta numa ferramenta onde uma IA edita seus arquivos.
 
 **Armadilhas já pagas** (leia antes de mexer): `AGENTS.md` (invariantes) e as linhas
 do §3 — em especial 24 (CI "parado" era branch mergeado sem evento), 25–26 (argv do
