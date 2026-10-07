@@ -21,6 +21,10 @@
       ran as root with `--cap-drop ALL` (no `CAP_DAC_OVERRIDE`, so it could not write
       the user's workspace and would have left `root`-owned files there). See
       `PROJECT_STATE.md` §3 items 25–26.
+- [x] Re-verified on the notebook (2026-10-07), now that its Docker is reachable:
+      the exact argv runs, files come out owned by the caller, all capabilities are
+      dropped, the network is blocked, `--rm` cleans up — and items 27/28 turned out
+      to be limitations of a *different* host, not of the product. See §3 item 30.
 - [x] `common/docker/compilerErrorParser.ts` — GCC/Clang, TS, Rustc
 - [x] `run_terminal_command` tool + logger container records
 - [x] `TerminalOutput.tsx` — ANSI highlighting + reactive status badge

@@ -59,7 +59,7 @@ sh scripts/env-probe.sh
 | CPU / RAM | AMD A4-3300M APU, **2 cores** · 5,3 GB · 49 GB free |
 | `node` / `npm` / `npx` | **ABSENT** (no nvm/volta/fnm/snap; apt offers Node 20, below the `>=22` floor) |
 | `cargo` / `rustc` | **ABSENT** (no `~/.cargo`) |
-| Docker CLI | present (29.7.2) — but **daemon DENIED**: user not in the `docker` group |
+| Docker | **29.7.2, daemon WORKS** — native `/var/lib/docker`, user in the `docker` group |
 | WebKitGTK 4.1 + GTK 3 | **present** — a Tauri window opens |
 | `ollama` | **0.35.1 running** · `deepseek-r1:1.5b` (local, 1.1 GB) + one cloud model |
 | Other | `python3` 3.13.7 · `git` 2.51.0 · `jq` 1.8.1 · `curl` 8.14.1 |
@@ -72,19 +72,23 @@ sh scripts/env-probe.sh
 | --- | --- |
 | read and write code, commit, push | **build** (`lint`/`typecheck`/`test`/`build`) |
 | follow CI results on GitHub | **compile the Rust shell** (`cargo`) |
-| **run the packaged app** (WebKitGTK present) | **run the Docker sandbox** (daemon denied) |
-| **exercise the agent against a real model** (ollama present) | install system packages (`sudo` needs a password) |
-| validate YAML/`bash -n` (python3 + PyYAML) | anything needing ≥ 3 cores or a GPU |
+| **run the packaged app** (WebKitGTK present) | install system packages (`sudo` needs a password) |
+| **exercise the agent against a real model** (ollama present) | run the *tests* of the sandbox (no Node) |
+| **run the Docker sandbox** (daemon works — verified live) | anything needing ≥ 3 cores or a GPU |
+| validate YAML/`bash -n` (python3 + PyYAML) | |
 
-Two consequences that keep biting:
+One consequence that keeps biting:
 
-1. **It is not a build machine.** GitHub Actions is the only compiler. A green
-   local-looking claim that was never executed is worse than saying "not
-   verified here".
-2. **The Docker sandbox cannot be exercised here** — which is exactly why
-   `PROJECT_STATE.md` §3 items 25–28, however real their fixes, must not be
-   assumed reproducible on this host. See §3 item 1, which records the false
-   claim that this machine had Node, Rust and Docker working.
+**It is not a build machine.** GitHub Actions is the only compiler. A green
+local-looking claim that was never executed is worse than saying "not verified
+here".
+
+What *changed* on 2026-10-07: adding the user to the `docker` group turned the
+sandbox from "installed but denied" into "usable", so the sandbox can now be
+**verified live on B** — not through `npm test` (still no Node), but by running
+the exact argv the sandbox builds. That is how item 27's `no-new-privileges`
+limitation was found **not** to reproduce here; see `PROJECT_STATE.md` §3 item 30
+for the measurement and what it does and does not settle.
 
 The weak CPU bounds the agent's usefulness: a local model runs, but slowly.
 That is a reason to prefer small models here and to keep agent turns short, not
