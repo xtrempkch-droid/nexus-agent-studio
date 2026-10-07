@@ -141,16 +141,41 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   Localmente (Linux) esses erros passam; **só o CI os pega**, então não confie num
   verde local para concluir que está portável.
 
+## Duas máquinas — descubra em qual você está antes de afirmar qualquer coisa
+
+Este projeto é trabalhado de **duas máquinas** com capacidades muito diferentes.
+Perfil completo e regra de delegação: **`docs/MACHINES.md`**.
+
+**Rode isto primeiro, toda sessão:**
+
+```sh
+sh scripts/env-probe.sh            # relatório completo
+sh scripts/env-probe.sh --brief    # identidade + o essencial
+```
+
+- **Máquina A** — a máquina de build. *Ainda não perfilada* (`VERIFICATION
+  REQUIRED`): rode o probe lá e preencha `docs/MACHINES.md`.
+- **Máquina B** — `juju-hppaviliong4notebookpc`, `machine-id` `3e798a6d`.
+  **Não compila** (sem `node`/`npm`/`cargo`) e **não roda o sandbox Docker**
+  (usuário fora do grupo `docker`). **Consegue** rodar o app empacotado
+  (WebKitGTK presente) e **exercitar o agente** (`ollama` rodando).
+
+**A regra: quem consegue executar uma verificação é quem a relata.** Na máquina B,
+`lint`/`typecheck`/`test`/`build` e o Docker são delegados ao CI — leia o run,
+cite a anotação e diga que rodou no GitHub. Nunca relate uma verificação que você
+não obteve, e nunca deduza a máquina: o probe responde.
+
 ## Como verificar o seu trabalho
 
-⚠️ **Verificado em 2026-10-07: esta máquina NÃO tem `node`/`npm`, NÃO tem
+⚠️ **Verificado em 2026-10-07 na máquina B: ela NÃO tem `node`/`npm`, NÃO tem
 `cargo`/`rustc`, e o `docker` está instalado mas sem permissão** (socket
 `root:docker`, usuário fora do grupo). `npm install`/`lint`/`typecheck`/`test`/
-`build` **não** rodam aqui, e o sandbox Docker **não** pode ser exercitado aqui.
+`build` **não** rodam lá, e o sandbox Docker **não** pode ser exercitado lá.
 **O GitHub Actions é o único compilador.** Se você não conseguiu executar uma
-verificação, diga isso — não a declare.
+verificação, diga isso — não a declare. (Nesta máquina de build, sim, tudo roda:
+confirme com `sh scripts/env-probe.sh`.)
 
-O que existe localmente para validar: **Python 3.13 + PyYAML** (parse de YAML e
+O que existe na máquina B para validar: **Python 3.13 + PyYAML** (parse de YAML e
 `bash -n` nos workflows, truque que já pegou bug real) e **`ollama`**, que permite
 exercitar o loop do agente contra um modelo real (`deepseek-r1:1.5b` local).
 

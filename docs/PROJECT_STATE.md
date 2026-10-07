@@ -10,6 +10,20 @@
 > **Como ler isto rápido:** §2 diz o que está pronto, §3 lista o que está bloqueado
 > (e como destravar), §5 item 17 é onde a fatia atual parou.
 
+> **⚠️ ANTES DE AFIRMAR QUALQUER COISA — rode o probe.** Este projeto é trabalhado
+> de **duas máquinas** com capacidades muito diferentes, e assumir a errada é como
+> uma sessão acaba declarando um `npm test` que nunca rodou. O perfil canônico está
+> em **`docs/MACHINES.md`**; a verdade é o comando:
+>
+> ```sh
+> sh scripts/env-probe.sh
+> ```
+>
+> **Máquina A** (build, ainda não perfilada) · **Máquina B**
+> (`juju-hppaviliong4notebookpc`, `machine-id` `3e798a6d`): **não compila** e **não
+> roda Docker**; consegue rodar o app empacotado e exercitar o agente.
+> **Quem pode executar uma verificação é quem a relata.**
+
 ---
 
 ## 1. O que é o projeto
@@ -57,7 +71,11 @@ passo a passo falam com o core de verdade.
 > "ambiente local" descrito neles não deve ser assumido. O que **falta** segue
 > igual: `sudo` sem senha, então o `cargo check` **completo** do `main.rs` (libs
 > GTK/WebKitGTK de sistema) depende do CI (`tauri.yml`). A janela só é aberta pelo
-> dono na própria máquina. | O modelo local é `deepseek-r1:1.5b` via
+> dono na própria máquina. |
+>
+> **Isto agora é máquina, não acidente.** O perfil completo das **duas** máquinas
+> está em **`docs/MACHINES.md`**, e `scripts/env-probe.sh` responde em um comando
+> qual delas está em uso e o que ela consegue fazer. Rode antes de afirmar. O modelo local é `deepseek-r1:1.5b` via
 Ollama (lento, sem GPU), mas agora **livremente selecionável na UI** (ver §5).
 
 No run **37404728248** (commit `ab839aa`) os 6 jobs originais passaram com todos os
