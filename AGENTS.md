@@ -143,8 +143,18 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
 
 ## Como verificar o seu trabalho
 
-A máquina de desenvolvimento **agora tem Node 22 + npm 9** (e Rust via `rustup`),
-então a verificação roda localmente:
+⚠️ **Verificado em 2026-10-07: esta máquina NÃO tem `node`/`npm`, NÃO tem
+`cargo`/`rustc`, e o `docker` está instalado mas sem permissão** (socket
+`root:docker`, usuário fora do grupo). `npm install`/`lint`/`typecheck`/`test`/
+`build` **não** rodam aqui, e o sandbox Docker **não** pode ser exercitado aqui.
+**O GitHub Actions é o único compilador.** Se você não conseguiu executar uma
+verificação, diga isso — não a declare.
+
+O que existe localmente para validar: **Python 3.13 + PyYAML** (parse de YAML e
+`bash -n` nos workflows, truque que já pegou bug real) e **`ollama`**, que permite
+exercitar o loop do agente contra um modelo real (`deepseek-r1:1.5b` local).
+
+Quando o Node existir, a verificação é:
 
 ```bash
 npm install
@@ -153,14 +163,11 @@ npm run smoke            # sobe dist/core.mjs e o dirige com um cliente MCP real
 npm run build:desktop    # empacota a UI (Vite + Tailwind v4 + alias @core)
 ```
 
-O que **ainda** não roda localmente é o `cargo check` **completo** do
-`src-tauri/src/main.rs`: ele exige as libs de sistema do Tauri (GTK/WebKitGTK), e
-a máquina não tem `sudo` sem senha nem o grupo `docker`. Para o Rust, rode o que
-dá em user-space (`cargo check`/`cargo test` dos módulos livres de Tauri
-`bridge.rs`/`mcp.rs`, isolados num crate temporário) e deixe o workflow `tauri`
-validar o `main.rs` completo no CI.
+O `cargo check` **completo** do `src-tauri/src/main.rs` nunca roda localmente: ele
+exige as libs de sistema do Tauri (GTK/WebKitGTK) e `sudo` sem senha não existe
+aqui. Deixe o workflow `tauri` validar o `main.rs` no CI.
 
-O GitHub Actions continua sendo a fonte de verdade: o workflow `build` roda
+O GitHub Actions é a fonte de verdade: o workflow `build` roda
 `lint → typecheck → test → build → smoke` na matriz 3 SOs × 2 Node, e o workflow
 `tauri` roda `cargo check` + `cargo test --include-ignored` quando
 `src-tauri/**`, `variants/desktop/**` ou `common/**` mudam.

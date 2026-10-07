@@ -4,7 +4,7 @@
 > de parada sobrevivam ao fim de uma janela de contexto. Se você é uma IA ou um
 > humano retomando este repositório, **leia este arquivo primeiro**.
 >
-> **Última atualização:** 2026-10-06 · **Commit atual:** confira com
+> **Última atualização:** 2026-10-07 · **Commit atual:** confira com
 > `git log -1 --oneline`
 >
 > **Como ler isto rápido:** §2 diz o que está pronto, §3 lista o que está bloqueado
@@ -40,18 +40,24 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 
 **Resumo: o pipeline está VERDE — 8 jobs** (6 de `build` × SO/Node, `cargo check`
 e o bundle `desktop-binary`). Nada mais é simulado: a UI, o agente e a aprovação
-passo a passo falam com o core de verdade. **Ambiente local mudou desde a última
-nota:** agora a máquina **tem `node` 22 + `npm` 9** (build, teste, smoke e
-`build:desktop` rodam localmente) e **Rust via `rustup`** (1.99.0, instalação
-user-space) — então `cargo check`/`cargo test` dos módulos livres de Tauri também
-rodam aqui. **`docker` também funciona agora** (o usuário entrou no grupo `docker`
-e o socket é `root:docker`), então o sandbox — que nunca havia executado nada —
-foi verificado em runtime: veja §3 itens 25–28, que também registram as duas
-limitações do ambiente (a flag `no-new-privileges` que este kernel rejeita e o
-`/tmp` privado do Docker do snap). O que **ainda** falta é `sudo` sem senha, então
-o `cargo check` **completo** do `main.rs` (que exige as libs GTK/WebKitGTK de
-sistema) continua dependendo do CI (`tauri.yml`). A janela só é
-aberta pelo dono na própria máquina. O modelo local é `deepseek-r1:1.5b` via
+passo a passo falam com o core de verdade.
+
+> ⚠️ **CORREÇÃO DE AMBIENTE — verificado em 2026-10-07 nesta máquina.** Uma nota
+> anterior aqui afirmava que "a máquina agora tem `node` 22 + `npm` 9, Rust via
+> `rustup` e `docker` funcionando". **As três afirmações são FALSAS** e foram
+> medidas: `node`/`npm` **ausentes** (nenhum nvm/volta/fnm/snap; o candidato do
+> apt é Node 20, abaixo do piso `>=22`), `cargo`/`rustc` **ausentes** (não existe
+> `~/.cargo`), e `docker` **instalado mas inutilizável** (o socket é `root:docker`
+> e `juju` **não** está no grupo → `permission denied`). **Consequência prática:**
+> `npm install`/`lint`/`typecheck`/`test`/`build` **não** rodam aqui, o sandbox
+> Docker **não** pode ser exercitado aqui, e **o CI continua sendo o único
+> compilador** — não declare verificação local que você não obteve. Os itens
+> §3 25–28 continuam válidos como *achados* (os commits existem e o CI os cobre),
+> mas **onde** aquelas reproduções ao vivo rodaram não é esta máquina, e o
+> "ambiente local" descrito neles não deve ser assumido. O que **falta** segue
+> igual: `sudo` sem senha, então o `cargo check` **completo** do `main.rs` (libs
+> GTK/WebKitGTK de sistema) depende do CI (`tauri.yml`). A janela só é aberta pelo
+> dono na própria máquina. | O modelo local é `deepseek-r1:1.5b` via
 Ollama (lento, sem GPU), mas agora **livremente selecionável na UI** (ver §5).
 
 No run **37404728248** (commit `ab839aa`) os 6 jobs originais passaram com todos os
@@ -76,7 +82,7 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 
 | # | Bloqueio | Estado / resolução |
 | --- | --- | --- |
-| 1 | Sem Node/npm na máquina local | ✅ **RESOLVIDO.** A máquina agora tem `node` 22 + `npm` 9 (e Rust via `rustup`), então lint/typecheck/test/build/smoke/build:desktop rodam localmente. Só o `cargo check` completo do `main.rs` (libs GTK de sistema) segue dependendo do CI. |
+| 1 | Sem Node/npm na máquina local | ❌ **REABERTO — a nota de "resolvido" era falsa.** Verificado em 2026-10-07: `node`/`npm` **ausentes** (nenhum nvm/volta/fnm/snap; o candidato do apt é Node 20, abaixo do piso `>=22`), `cargo`/`rustc` **ausentes**, e `docker` **instalado mas sem permissão** (`juju` não está no grupo `docker`). `npm install`/`lint`/`typecheck`/`test`/`build` **não** rodam aqui. **O CI é o único compilador.** `ollama` **está** instalado e rodando — é a única peça de runtime disponível localmente além de `python3`. |
 | 2 | `package-lock.json` ausente → `npm ci` e `cache: npm` falhariam no CI | ✅ **RESOLVIDO.** O lockfile foi gerado pelo workflow `bootstrap-lockfile`, **validado contra o `package.json`** e commitado na raiz. O `build.yml` voltou para `npm ci` + `cache: npm`. O arquivo tem 239 entradas, `lockfileVersion: 3`, e `dependencies`/`devDependencies` batem **exatamente** com o manifesto. `typescript` resolveu em **6.0.3** — dentro da faixa `~6.0.2` e do peer `>=4.8.4 <6.1.0` do `typescript-eslint@8.71.1`. |
 | 3 | `git push` requer credenciais | ✅ **RESOLVIDO.** HTTPS não tinha credencial, mas a chave `~/.ssh/id_ed25519` já está autorizada na conta. O remote `origin` foi apontado para SSH: `git@github.com:xtrempkch-droid/nexus-agent-studio.git`. |
 | 4 | A UI desktop é uma **simulação** no browser | Falta a ponte IPC (Electron/Tauri) entre `variants/desktop` e `common/`. Ver §5. |
@@ -105,6 +111,7 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 | 26 | **O container não conseguia escrever no projeto** (e sujava a pasta com arquivos do `root`) | ✅ **CORRIGIDO e verificado.** `--cap-drop ALL` + root **remove o `CAP_DAC_OVERRIDE`**: o uid 0 do container deixa de ser capaz de escrever num diretório do usuário do desktop → `gcc -o app main.c` falhava com `Permission denied`. Pior: onde ele *podia* escrever (diretório world-writable), deixava arquivos com dono `root` no projeto, que o usuário não conseguiria mais editar nem apagar. Agora o container roda como **o próprio usuário** (`--user <uid>:<gid>`, deduzido de `process.getuid()`; no Windows a flag é omitida, porque não há uid e o Docker Desktop trata permissões sozinho) com `HOME=/tmp` (o `/root` da imagem não é gravável pelo usuário mapeado, e `npm`/`pip` quebram sem um HOME gravável; apontar `HOME` para o workspace espalharia caches dentro do projeto — pior). **Prova E2E sobre MCP** (core real, `gcc:latest`): `gcc -o programa main.c && ./programa` → exit 0 e `COMPILOU-E-RODOU`; `CapEff: 0000000000000000`; sem DNS (`--network none`); arquivo quebrado → `exit 1` e **2 hints inline** em `quebrado.c:1` com `source: docker:gcc:latest`; e os arquivos criados no container saem no host como `1000:1000` (do usuário), não `root`. |
 | 27 | `--security-opt no-new-privileges` torna o sandbox **inutilizável** neste kernel | 🟡 **LIMITAÇÃO DO AMBIENTE, com escape explícito.** Reproduzido ao vivo: com essa flag, **todo** `execve` dentro do container falha com `EPERM` (`exec /bin/sh: operation not permitted`) — inclusive sozinha, sem `--cap-drop`, sem setuid no binário e com a imagem oficial `busybox` (kernel `7.0.0-38-generic`, Docker 29.8.0 do snap). Não é o nosso argv: é o kernel/runtime. A flag **continua ligada por padrão** (é defesa em profundidade contra setuid na imagem) e agora é desligável **apenas por ambiente**, `NEXUS_SANDBOX_NO_NEW_PRIVILEGES=0`, com marcador na linha de boot (`[no-new-privileges DESLIGADO no sandbox]`) — o webview nunca decide isso. |
 | 28 | O Docker do **snap** tem `/tmp` privado → workspace em `/tmp` monta **vazio** | 🟡 **LIMITAÇÃO DO AMBIENTE, documentada.** Nesta máquina o daemon é o snap (`Operating System: Ubuntu Core 24`, `Docker Root Dir: /var/snap/docker/...`): arquivos criados no container num bind de `/tmp` **não aparecem** no host e vice-versa, enquanto `/home` funciona nos dois sentidos. Consequência: um projeto **dentro de `/tmp`** monta um `/workspace` vazio e o agente compila contra o nada — falha confusa, não erro. Projetos em `/home` (o caso real do seletor de pastas) funcionam. Detectar isso é o próximo passo candidato (comparar a listagem do host com a do container uma vez por troca de workspace e avisar). |
+| 29 | **O dono testava um binário de 22 h antes e relatava bugs já corrigidos.** | ⚠️ **ARMADILHA RECORRENTE — leia antes de "consertar" uma queixa.** Em 2026-10-07 o relato era "abre mas não consigo abrir pastas/arquivos, e as configurações de IA estão presas no Ollama" — **tudo isso já estava corrigido em `main`**. O `dist/core.mjs` do bundle baixado (6/out 05:24) expunha **5 tools**; o de `main` expõe **11**. Faltavam justamente `ask_agent` (chat real), `list_models` (sincronizar provedor/modelo), `set_editor_context` e as três de LSP. **Prova direta, não inferência por data:** `grep -c registerTool` no `core.mjs` do bundle, ou procurar os nomes das tools. **Consequência de processo:** o `desktop-binary` só roda em `push`, e **nada avisa o dono que o artefato mudou**. Antes de investigar qualquer queixa de comportamento, **confirme a idade do bundle** (`ls -la ~/Downloads/nexus-agent-studio-linux-x64/dist/core.mjs` e a contagem de tools) — metade das "regressões" some quando o binário é atual. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 
