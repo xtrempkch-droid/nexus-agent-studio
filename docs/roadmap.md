@@ -54,8 +54,11 @@
       debounced caret reporting, `languageId` derived in the core) + UI wiring
 - [x] Close editor tabs; give the agent a configurable budget (time, with `0` meaning
       "no deadline", and steps) and report an unfinished turn honestly
-- [ ] Request queue in the sidecar instead of the blocking session mutex — a long
-      `ask_agent` turn currently serialises every other tool call behind it
+- [x] Request queue in the sidecar instead of the blocking session mutex —
+      `src-tauri/src/worker.rs` owns the session on one thread, handles requests in
+      submission order, and holds nothing while the core works. A slow turn no
+      longer blocks every other tool; a request that spends its budget queued is
+      refused without being sent, and says so.
 - [ ] WASM compile target for `common/` (requires DOM-free audit)
 - [ ] Plugin marketplace with signature verification (`*.plg` signed bundles)
 - [ ] Remote MCP over Streamable HTTP for team workspaces

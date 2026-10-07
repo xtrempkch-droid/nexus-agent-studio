@@ -116,14 +116,24 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   usuário (`Permission denied`) e, onde consegue, deixa arquivos com dono `root` no
   projeto. O run usa `--user <uid>:<gid>` do usuário atual e `HOME=/tmp` (§3 item
   26). No Windows a flag é omitida: não há uid e o Docker Desktop trata permissões.
-- **A sessão do core é única e serializada.** `ShellState::with_core` segura um
-  `Mutex` por toda a chamada, então **duas chamadas de tool nunca rodam juntas**, e
-  `ask_agent` segura esse mutex por todo o tempo do modelo (minutos num modelo
-  local). Consequência para quem escreve UI: **nunca dispare uma chamada de core por
-  evento** (cada tecla, cada pixel de scroll) — as requisições ficam *enfileiradas no
-  mutex* e a espera se acumula. Debounce e **no máximo uma em voo** (veja
-  `flushEditorContext` em `App.tsx`). A solução de fundo é a fila no sidecar (§5
-  item 6-a do `PROJECT_STATE.md`).
+- **A sessão do core é única, e as requisições formam uma fila.** `worker.rs` tem
+  **uma** thread dona da sessão: nada é segurado durante uma chamada, e cada pedido
+  espera na sua própria resposta. A serialização continua obrigatória (stdio é um
+  canal só) e continua significando que **uma tool lenta adia as seguintes** — um
+  turno de `ask_agent` pode levar minutos num modelo local.
+  **Três consequências para quem escreve UI:**
+  1. **Nunca dispare uma chamada de core por evento** (cada tecla, cada pixel de
+     scroll): elas entram na fila e a espera se acumula. Debounce e **no máximo uma
+     em voo** (veja `flushEditorContext` em `App.tsx`). A fila melhora *onde* a
+     espera acontece (FIFO, ordem previsível, chamador livre), **não** a torna grátis.
+  2. **O orçamento de tempo conta desde a submissão**, não desde o início da
+     execução, porque é isso que "600 segundos" significa para quem digitou. Assim,
+     um pedido que passou o orçamento na fila é recusado **sem ser enviado**, e a
+     mensagem diz qual dos dois casos ocorreu — as correções são diferentes.
+     `None` é "sem prazo"; e há 1 s de cortesia para a resposta específica do worker
+     chegar antes do chamador desistir (`REPLY_GRACE`).
+  3. **Tempo esgotado não cancela**: o core segue trabalhando no pedido abandonado e
+     o próximo espera por ele. Não existe cancelamento aqui.
 - **O orçamento do agente tem quatro números espelhados entre camadas.** O padrão e o
   teto do tempo (600 s, 24 h) vivem em `src-tauri/src/mcp.rs` (`tool_timeout`) e o
   mínimo/máximo de passos em `common/agent/agentLoop.ts` (`DEFAULT_MAX_STEPS` /

@@ -34,3 +34,6 @@ pub mod bridge;
 
 #[path = "../../src/mcp.rs"]
 pub mod mcp;
+
+#[path = "../../src/worker.rs"]
+pub mod worker;

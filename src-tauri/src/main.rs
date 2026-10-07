@@ -4,11 +4,17 @@
 //! the only layer allowed to touch the operating system. The editor core is the
 //! headless TypeScript package in `common/`; nothing here reimplements it.
 //!
-//! The shell owns one **long-lived** core session — started lazily by
-//! `ShellState::with_core`, restarted if the process died — and exposes it to the
-//! webview through a small command surface: `shell_info`, `workspace_info`,
-//! `core_boot_probe`, `core_handshake`, `call_core_tool`, `set_workspace`,
-//! `pick_workspace` and `pick_file`.
+//! The shell owns one **long-lived** core session. It does not hold it directly:
+//! [`worker::CoreWorker`] owns it on a dedicated thread and every request queues
+//! behind that thread in submission order. The command surface is `shell_info`,
+//! `workspace_info`, `core_boot_probe`, `core_handshake`, `call_core_tool`,
+//! `set_workspace`, `pick_workspace` and `pick_file`.
+//!
+//! The queue replaced a `Mutex<Option<CoreSession>>` that every command held for
+//! the whole call. Serialising the channel was always required — stdio is one
+//! pipe — but holding a lock while waiting was not, and it meant a slow
+//! `ask_agent` turn blocked every other tool for as long as the model took. See
+//! `worker` for what changed and, just as importantly, for what did not.
 //!
 //! Two roots are kept deliberately separate: `app_root` is where the bundle
 //! lives and the core is found, `workspace_root` is the project the core edits
@@ -17,153 +23,61 @@
 //! directory by switching the stored path and restarting the core lazily.
 //!
 //! The layers are split so each can be tested without a window: process plumbing
-//! lives in `bridge`, the MCP protocol in `mcp`, and this file only wires them to
-//! Tauri.
+//! lives in `bridge`, the MCP protocol in `mcp`, the request queue in `worker`,
+//! and this file only wires them to Tauri.
 
 // Prevents an extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bridge;
 mod mcp;
+mod worker;
 
-use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Mutex};
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use bridge::{spawn_core, wait_for_boot, CoreConfig};
-use mcp::{CoreSession, SessionError};
 use serde_json::Value;
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath};
+use worker::{CoreDescription, CoreWorker};
 
 /// How long the shell waits for the core to announce itself.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// How long each step of the MCP handshake may take.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Budget for `core_handshake`.
+///
+/// Generous on purpose: the first call also **starts** the core, so it pays for a
+/// process spawn plus a handshake (bounded at 20 s in `worker`) before the listing
+/// it was asked for.
+const DESCRIBE_BUDGET: Duration = Duration::from_secs(60);
+
+/// Budget for re-pointing the editor at another directory.
+const SWITCH_BUDGET: Duration = Duration::from_secs(30);
 
 /// State shared with the commands.
 struct ShellState {
     /// Where the bundle lives: `dist/core.mjs` and `runtime/node` resolve from
     /// here. Decided once at startup and never taken from the webview.
     app_root: PathBuf,
-    /// The directory the core is pointed at — what the editor actually opens.
+    /// The request queue in front of the single core session.
     ///
-    /// Kept apart from `app_root` on purpose. The core reads its workspace from
-    /// its own working directory, so giving both the same value would pin the
-    /// editor to whatever directory the app happened to be launched from. Unlike
-    /// `app_root`, this is mutable at runtime: the user can open another project
-    /// through the native folder picker, and `switch_workspace` updates it.
-    workspace_root: Mutex<PathBuf>,
-    /// The single core session, started on first use and reused after that.
+    /// The workspace lives inside it rather than here, and deliberately so: the
+    /// core reads its workspace from its own working directory, and the worker is
+    /// what starts that process. One owner means one value to keep in step — a
+    /// second copy here would be a second thing that can drift, and drift means the
+    /// header names a project the core is not serving.
     ///
-    /// The mutex is not only about thread safety: stdio is one
-    /// request/response channel, so calls have to be serialised regardless. The
-    /// honest cost is that a slow tool blocks the others, which is why a request
-    /// queue belongs on the to-do list rather than in this slice.
-    core: Mutex<Option<CoreSession>>,
-    /// Outbound channel for server-to-client notifications (agent stream
-    /// deltas). Every core session is handed a clone, and a forwarder thread
-    /// drains the one receiver into Tauri events for the webview. The reader
-    /// threads do the sending, so streaming never contends with the request lock.
-    notification_tx: mpsc::Sender<Value>,
+    /// Kept apart from `app_root` on purpose: giving both the same value would pin
+    /// the editor to whatever directory the app was launched from.
+    worker: CoreWorker,
 }
 
 impl ShellState {
-    fn new(app_root: PathBuf, workspace_root: PathBuf, notification_tx: mpsc::Sender<Value>) -> Self {
-        Self {
-            app_root,
-            workspace_root: Mutex::new(workspace_root),
-            core: Mutex::new(None),
-            notification_tx,
-        }
-    }
-
-    /// Run `use_core` against a live session, starting or restarting it if needed.
-    fn with_core<T>(
-        &self,
-        use_core: impl FnOnce(&mut CoreSession) -> Result<T, SessionError>,
-    ) -> Result<T, String> {
-        let mut guard = self
-            .core
-            .lock()
-            .map_err(|_| "the core session lock was poisoned".to_string())?;
-
-        let dead = match guard.as_mut() {
-            Some(session) => !session.is_running(),
-            None => true,
-        };
-
-        if dead {
-            // The protocol is stateless and the spec says the client SHOULD
-            // restart a server that exited unexpectedly, so a dead core is
-            // replaced rather than surfaced as an error.
-            let workspace = self
-                .workspace_root
-                .lock()
-                .map_err(|_| "the workspace lock was poisoned".to_string())?;
-            *guard = Some(self.start_core(&workspace)?);
-        }
-
-        let session = guard
-            .as_mut()
-            .ok_or_else(|| "the core session is unavailable".to_string())?;
-
-        use_core(session).map_err(|error| error.to_string())
-    }
-
-    /// Spawn a core and complete the legacy handshake on it.
-    ///
-    /// The core binary is located through `app_root`, but the process runs with
-    /// `workspace_root` as its working directory — that is how the core decides
-    /// which project to serve. Every session is wired to the notification
-    /// channel, so its reader thread streams deltas back while a call is in
-    /// flight.
-    fn start_core(&self, workspace_root: &Path) -> Result<CoreSession, String> {
-        let config = CoreConfig::for_app_root(&self.app_root);
-        let child = spawn_core(&config, workspace_root).map_err(|error| error.to_string())?;
-        let mut session = CoreSession::start_with_notifications(child, Some(self.notification_tx.clone()))
-            .map_err(|error| error.to_string())?;
-
-        if let Err(error) = session.initialize(HANDSHAKE_TIMEOUT) {
-            // Never leak a core that failed to handshake.
-            let _ = session.shutdown(Duration::from_secs(5));
-            return Err(error.to_string());
-        }
-
-        Ok(session)
-    }
-
-    /// Point the editor at a new workspace directory and stop the running core.
-    ///
-    /// The path is canonicalised so the label and every file tool agree on one
-    /// spelling, and the existing core is shut down rather than left pointed at
-    /// the old directory — the next use lazily starts a fresh one there. Locks
-    /// are taken one at a time, never nested, so there is no ordering to deadlock.
+    /// Re-point the editor at a new workspace directory.
     fn switch_workspace(&self, path: PathBuf) -> Result<String, String> {
-        let canonical = path
-            .canonicalize()
-            .map_err(|error| format!("pasta inválida: {error}"))?;
-        if !canonical.is_dir() {
-            return Err(format!("não é um diretório: {}", canonical.display()));
-        }
-
-        let mut core = self
-            .core
-            .lock()
-            .map_err(|_| "the core session lock was poisoned".to_string())?;
-        if let Some(session) = core.take() {
-            let _ = session.shutdown(Duration::from_secs(5));
-        }
-        drop(core);
-
-        let mut workspace = self
-            .workspace_root
-            .lock()
-            .map_err(|_| "the workspace lock was poisoned".to_string())?;
-        *workspace = canonical.clone();
-
-        Ok(canonical.display().to_string())
+        self.worker.switch_workspace(path, Some(SWITCH_BUDGET))
     }
 }
 
@@ -188,10 +102,7 @@ async fn core_boot_probe(app: tauri::AppHandle) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<ShellState>();
         let config = CoreConfig::for_app_root(&state.app_root);
-        let workspace = state
-            .workspace_root
-            .lock()
-            .map_err(|_| "the workspace lock was poisoned".to_string())?;
+        let workspace = state.worker.workspace();
         let mut child = spawn_core(&config, &workspace).map_err(|error| error.to_string())?;
 
         let read = wait_for_boot(&mut child, BOOT_TIMEOUT);
@@ -215,24 +126,23 @@ async fn core_boot_probe(app: tauri::AppHandle) -> Result<String, String> {
 async fn core_handshake(app: tauri::AppHandle) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<ShellState>();
-        state.with_core(describe_core)
+        let description = state.worker.describe(Some(DESCRIBE_BUDGET))?;
+        Ok(render_description(&description))
     })
     .await
     .map_err(|error| format!("o handshake do core falhou: {error}"))?
 }
 
-/// List the tools and render a one-line description.
-fn describe_core(session: &mut CoreSession) -> Result<String, SessionError> {
-    let tools = session.list_tools(HANDSHAKE_TIMEOUT)?;
+/// Render a core description as one line.
+fn render_description(description: &CoreDescription) -> String {
+    let name = description.server_name.as_deref().unwrap_or("<unnamed>");
+    let version = description.negotiated_version.as_deref().unwrap_or("<absent>");
 
-    let name = session.server_name().unwrap_or("<unnamed>").to_owned();
-    let version = session.negotiated_version().unwrap_or("<absent>").to_owned();
-
-    Ok(format!(
+    format!(
         "{name} (protocol {version}) exposes {} tool(s): {}",
-        tools.len(),
-        tools.join(", ")
-    ))
+        description.tools.len(),
+        description.tools.join(", ")
+    )
 }
 
 /// Invoke a core tool by name, passing `arguments` through unchanged.
@@ -248,6 +158,10 @@ fn describe_core(session: &mut CoreSession) -> Result<String, SessionError> {
 /// responding". Moving the blocking stdio work off the main thread is the fix;
 /// the longer timeout makes the wait long, and this makes a long wait harmless.
 ///
+/// The wait now happens on this thread's own reply channel rather than on a mutex
+/// held across the whole call, so a slow turn no longer stops other requests from
+/// being submitted and handled in order (see `worker`).
+///
 /// `timeout_seconds` is the webview's setting for how long a model turn may take
 /// (Tauri renames arguments to camelCase, so it arrives as `timeoutSeconds`). It
 /// is optional: without it [`mcp::tool_timeout`] applies its documented default,
@@ -259,10 +173,10 @@ async fn call_core_tool(
     arguments: Value,
     timeout_seconds: Option<u64>,
 ) -> Result<Value, String> {
-    let timeout = mcp::tool_timeout(timeout_seconds);
+    let budget = mcp::tool_timeout(timeout_seconds);
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<ShellState>();
-        state.with_core(move |session| session.call_tool(&tool, arguments, timeout))
+        state.worker.call_tool(&tool, arguments, budget)
     })
     .await
     .map_err(|error| format!("a chamada ao core falhou: {error}"))?
@@ -275,11 +189,9 @@ async fn call_core_tool(
 /// a wrong workspace from an empty one. This reports the real path instead.
 #[tauri::command]
 fn workspace_info(state: tauri::State<'_, ShellState>) -> Result<String, String> {
-    let workspace = state
-        .workspace_root
-        .lock()
-        .map_err(|_| "the workspace lock was poisoned".to_string())?;
-    Ok(workspace.display().to_string())
+    // Read straight from the shared cell, never through the queue: this has to stay
+    // instant while a long turn is in flight, or the header appears to hang.
+    Ok(state.worker.workspace().display().to_string())
 }
 
 /// Point the editor at an explicit workspace directory chosen by the webview.
@@ -298,7 +210,6 @@ async fn set_workspace(app: tauri::AppHandle, path: String) -> Result<String, St
     .await
     .map_err(|error| format!("a troca de pasta falhou: {error}"))?
 }
-
 /// Open the native folder picker and, if the user chooses a folder, switch the
 /// editor to it. Resolves to the new (canonicalised) workspace path, or `None`
 /// when the dialog was cancelled.
@@ -323,8 +234,16 @@ async fn pick_workspace(app: tauri::AppHandle) -> Result<Option<String>, String>
         .into_path()
         .map_err(|error| format!("caminho inválido: {error}"))?;
 
-    let state = app.state::<ShellState>();
-    Ok(Some(state.switch_workspace(path)?))
+    // The switch stops the old core, so it is blocking work — same rule as
+    // `set_workspace`. Calling it inline would stall a runtime worker.
+    let switch_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = switch_handle.state::<ShellState>();
+        state.switch_workspace(path)
+    })
+    .await
+    .map_err(|error| format!("a troca de pasta falhou: {error}"))?
+    .map(Some)
 }
 
 /// Open the native **file** picker and switch the editor to the file's folder.
@@ -363,8 +282,14 @@ async fn pick_file(app: tauri::AppHandle) -> Result<Option<(String, String)>, St
         .to_string_lossy()
         .into_owned();
 
-    let state = app.state::<ShellState>();
-    let workspace = state.switch_workspace(parent)?;
+    let switch_handle = app.clone();
+    let workspace = tauri::async_runtime::spawn_blocking(move || {
+        let state = switch_handle.state::<ShellState>();
+        state.switch_workspace(parent)
+    })
+    .await
+    .map_err(|error| format!("a troca de pasta falhou: {error}"))??;
+
     Ok(Some((workspace, name)))
 }
 
@@ -378,9 +303,24 @@ fn main() {
     // the same sink.
     let (notification_tx, notification_rx) = mpsc::channel::<Value>();
 
+    // One value for the workspace, owned by the worker: it writes the path when a
+    // switch is applied, and `workspace_info` reads it through the worker without
+    // queueing behind a turn.
+    let workspace = Arc::new(Mutex::new(workspace_root));
+
+    // The worker owns the core session. It starts the core lazily on the first job
+    // that needs one, so an app that is opened and left alone pays for nothing.
+    let core_worker = CoreWorker::spawn(
+        worker::core_factory(app_root.clone(), Some(notification_tx)),
+        workspace,
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(ShellState::new(app_root, workspace_root, notification_tx))
+        .manage(ShellState {
+            app_root,
+            worker: core_worker,
+        })
         .invoke_handler(tauri::generate_handler![
             shell_info,
             workspace_info,
