@@ -37,6 +37,19 @@ export interface AgentToolsOptions {
   readonly streamFetcher?: LlmStreamFetcher;
 }
 
+/**
+ * The argument names a tool's schema declares.
+ *
+ * Read defensively because `ToolDefinition.inputSchema` is typed as the generic
+ * `z.ZodType`: only objects have `shape`, and a future tool may use some other
+ * schema. An unknown shape simply yields no names, which costs nothing — the
+ * names are only used to make failure feedback actionable.
+ */
+function parameterNamesOf(schema: z.ZodType): readonly string[] {
+  const shape = (schema as { shape?: unknown }).shape;
+  return typeof shape === 'object' && shape !== null ? Object.keys(shape) : [];
+}
+
 /** Register the agent tool. */
 export function createAgentTools(options: AgentToolsOptions): ToolRegistration[] {
   const definition = {
@@ -72,6 +85,7 @@ export function createAgentTools(options: AgentToolsOptions): ToolRegistration[]
   const agentTools: readonly AgentTool[] = options.tools.map((tool) => ({
     name: tool.definition.name,
     description: tool.definition.description,
+    parameters: parameterNamesOf(tool.definition.inputSchema),
     execute: async (arguments_) => {
       const result = await tool.handler(arguments_);
       const text = result.content.map((block) => block.text).join('\n');

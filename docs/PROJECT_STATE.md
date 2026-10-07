@@ -36,7 +36,7 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 | 4 | Arquitetura de plugins | ✅ completo | 🟡 parcial: registro/unload cobertos por teste, mas nenhum plugin real foi carregado |
 | 5 | Configuração e build | ✅ completo | ✅ `build:desktop` roda no CI e o bundle portátil se verifica por handshake dentro de si |
 | 6 | UI desktop ligada ao core | ✅ completo | ✅ explorador, editor, terminal, configurações e agente falam com o core; janela só abre na máquina do dono (WebKitGTK) |
-| 7 | Agente + aprovação passo a passo | ✅ completo | 🟡 loop testado com `fetch` injetado; não rodado contra o modelo na janela (sem tela no CI) |
+| 7 | Agente + aprovação passo a passo | ✅ completo | ✅ loop exercitado contra **modelos reais** (Ollama local, §5 item 19) — foi assim que apareceram os defeitos de relato e de repetição; a UI que consome o resultado segue verificada no browser |
 
 **Resumo: o pipeline está VERDE — 8 jobs** (6 de `build` × SO/Node, `cargo check`
 e o bundle `desktop-binary`). Nada mais é simulado: a UI, o agente e a aprovação
@@ -411,6 +411,36 @@ node dist/core.mjs      # core como MCP server stdio
     chegando como `timeoutSeconds: 1800` **no comando** (fora dos argumentos da tool)
     e `maxSteps: 20` **nos argumentos**. A mensagem de timeout foi conferida
     injetando a falha do shell.
+19. ✅ **O agente parou de mentir sobre o que aconteceu** — e a causa real de "a IA
+    não cria os arquivos" apareceu. Primeira vez que o loop foi exercitado com
+    **modelo real** (Ollama nesta máquina; a §2 dizia "não rodado contra o modelo").
+    Três defeitos, todos visíveis num único traço:
+    - **Erro repetido queimava o orçamento.** O `qwen2.5-coder:3b` inventou
+      `contents` para `content`, chamou `write_file` **6 vezes com o mesmo erro** e o
+      turno terminou dizendo "atingiu o limite de passos". Agora **uma** repetição
+      idêntica é permitida (um timeout pode passar na segunda) e a **segunda** igual
+      encerra o turno explicando o porquê — a evidência de que repetir não resolve.
+    - **O feedback não era acionável.** A mensagem de validação nomeia o campo
+      **ausente** (`content: expected string, received undefined`), o que não bastou
+      para o modelo se corrigir. O loop agora recebe os nomes de argumentos **do
+      próprio schema Zod** (§5 item 18, `parameterNamesOf`) e diz "a ferramenta
+      espera exatamente estes argumentos: path, content".
+    - **"Não concluiu" era mentira às vezes.** Com `llama3.2:latest` o agente
+      **escreveu os 3 arquivos** e depois divagou (`list_models`, um `docker run`
+      inútil) até o orçamento acabar — o usuário era informado de que a tarefa não
+      concluiu **com os arquivos no disco**. Agora a mensagem final lista as
+      ferramentas que responderam e só culpa uma falha quando ela foi realmente a
+      **última** coisa que aconteceu (um erro do qual o modelo já se recuperou
+      apontaria a correção errada). Quando a última chamada falhou, as **duas**
+      leituras são oferecidas em vez de adivinhar ("talvez só precisasse de mais
+      passos; se o erro se repetir sempre, aumentar não resolve"); a afirmação forte
+      fica só na guarda de repetição, onde a evidência existe.
+    **Verificado:** 235 testes (eram 233; +2 e mais 4 reescritos), e **com modelos
+    reais**: `llama3.2:latest` criou 2 dos 3 arquivos e esgotou os passos no meio da
+    exploração — a mensagem nova relata isso exatamente; `qwen2.5-coder:3b` mostrou
+    os dois modos de falha (o `contents` inventado e responder em prosa sem chamar
+    ferramenta). **Conclusão útil para o usuário:** com o padrão de 6 passos, criar 3
+    arquivos fica no limite — a configuração do item 18 é o que resolve.
 
 ---
 
@@ -418,7 +448,8 @@ node dist/core.mjs      # core como MCP server stdio
 cliente, orquestração, tools MCP (`get_diagnostics`, `configure_language_server`,
 `list_language_servers`) e fiação na UI. O `get_editor_context` também deixou de ser
 placeholder (§5 item 17), o agente tem **orçamento configurável** (tempo e passos,
-§5 item 18) e a correção do travamento da janela está em `main` desde o
+§5 item 18) e as falhas do turno são **relatadas honestamente** (§5 item 19). A
+correção do travamento da janela está em `main` desde o
 PR #8 (§3 item 24 — falta só **reconstruir o `.exe`**). O **sandbox Docker passou a
 funcionar de fato** (§3 itens 25–28): era o último pedaço da fase 3 que só tinha
 teste unitário, e agora está verificado em runtime compilando C de verdade. O que

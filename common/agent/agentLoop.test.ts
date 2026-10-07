@@ -284,3 +284,208 @@ describe('runAgentTurn', () => {
     ).toEqual(['read_file']);
   });
 });
+
+/**
+ * A fetcher that records the request bodies, so the corrective feedback the model
+ * receives can be asserted — the point of this group is what the model is *told*,
+ * which the scripted fetcher above throws away.
+ */
+function recordingFetcher(...responses: string[]): {
+  readonly fetcher: LlmStreamFetcher;
+  readonly bodies: unknown[];
+} {
+  const bodies: unknown[] = [];
+  let index = 0;
+  return {
+    bodies,
+    fetcher: async (_url, body) => {
+      bodies.push(body);
+      const content = responses[Math.min(index, responses.length - 1)] ?? '';
+      index += 1;
+      return {
+        ok: true,
+        status: 200,
+        chunks: (async function* () {
+          yield ndjson(content);
+        })(),
+      };
+    },
+  };
+}
+
+/** The `messages` array of the nth request the fetcher saw. */
+function messagesOf(bodies: readonly unknown[], index: number): { role: string; content: string }[] {
+  const body = bodies[index] as { messages?: { role: string; content: string }[] } | undefined;
+  return body?.messages ?? [];
+}
+
+/** A tool that always fails the same way, with its argument names declared. */
+function alwaysFailing(parameters: readonly string[]): AgentTool {
+  return {
+    name: 'write_file',
+    description: 'escreve um arquivo',
+    parameters,
+    execute: async () => 'ERRO: Input validation error: content: expected string, received undefined',
+  };
+}
+
+const REPEATED_CALL = '{"tool":"write_file","arguments":{"path":"a.py","contents":"x"}}';
+
+describe('a failing tool call', () => {
+  it('stops after repeating the identical failure instead of burning the budget', async () => {
+    // The real case this comes from: a small local model invented `contents` for
+    // `content`, called six identical times, and the turn ended blaming the step
+    // limit. Two identical failures are enough to know another attempt will not
+    // help; the budget is reserved for something else.
+    const turn = await runAgentTurn({
+      ...BASE,
+      tools: [alwaysFailing(['path', 'content'])],
+      maxSteps: 6,
+      streamFetcher: scriptedFetcher(REPEATED_CALL),
+    });
+
+    expect(turn.steps).toHaveLength(2);
+    expect(turn.answer).toContain('write_file');
+    expect(turn.answer).toContain('duas vezes seguidas');
+    expect(turn.answer).toContain('content: expected string');
+    // And it says what the tool wanted, which is the part the model got wrong.
+    expect(turn.answer).toContain('path, content');
+  });
+
+  it('tells the model which arguments the tool expects', async () => {
+    const { fetcher, bodies } = recordingFetcher(REPEATED_CALL);
+
+    await runAgentTurn({
+      ...BASE,
+      tools: [alwaysFailing(['path', 'content'])],
+      streamFetcher: fetcher,
+    });
+
+    // Request 0 is the first attempt; request 1 carries the feedback from it.
+    const feedback = messagesOf(bodies, 1).map((message) => message.content).join('\n');
+    expect(feedback).toContain('Resultado de write_file');
+    expect(feedback).toContain('content: expected string');
+    expect(feedback).toContain('espera exatamente estes argumentos: path, content');
+  });
+
+  it('keeps going when the same call fails differently', async () => {
+    // A second attempt is worth it when something changed — a timeout or a
+    // transient error looks like this, and stopping on it would be wrong. Every
+    // attempt fails with its own message here, so nothing ever repeats.
+    const seen: string[] = [];
+    let attempt = 0;
+    const flaky: AgentTool = {
+      name: 'write_file',
+      description: 'escreve um arquivo',
+      parameters: ['path', 'content'],
+      execute: async () => {
+        attempt += 1;
+        seen.push(`attempt ${String(attempt)}`);
+        return `ERRO: falha número ${String(attempt)}`;
+      },
+    };
+
+    const turn = await runAgentTurn({
+      ...BASE,
+      tools: [flaky],
+      maxSteps: 3,
+      streamFetcher: scriptedFetcher(REPEATED_CALL),
+    });
+
+    expect(seen).toHaveLength(3);
+    expect(turn.answer).not.toContain('duas vezes seguidas');
+    expect(turn.answer).toContain('limite de passos');
+  });
+
+  it('offers both readings when the last call failed', async () => {
+    // The loop cannot tell "it was mid-exploration and needed more steps" from
+    // "this call is wrong", so it must not claim one. Each attempt differs here so
+    // the repeat-guard stays out of the way.
+    let attempt = 0;
+    const varying: AgentTool = {
+      name: 'write_file',
+      description: 'escreve um arquivo',
+      parameters: ['path', 'content'],
+      execute: async () => {
+        attempt += 1;
+        return `ERRO: falha número ${String(attempt)}`;
+      },
+    };
+
+    const turn = await runAgentTurn({
+      ...BASE,
+      tools: [varying],
+      maxSteps: 3,
+      streamFetcher: scriptedFetcher(REPEATED_CALL),
+    });
+
+    expect(turn.steps).toHaveLength(3);
+    expect(turn.answer).toContain('limite de passos');
+    expect(turn.answer).toContain('write_file');
+    expect(turn.answer).toContain('falha número 3');
+    expect(turn.answer).toContain('Se ele só precisava de mais passos');
+    expect(turn.answer).not.toContain('só repete o mesmo erro');
+  });
+
+  it('reports what succeeded when the budget runs out after the work was done', async () => {
+    // The real case: a model wrote the three files, then wandered into
+    // `list_models` and a pointless command, and never emitted a final answer.
+    // Saying "não concluiu" there is untrue — the files are on disk.
+    const calls: string[] = [];
+    const turn = await runAgentTurn({
+      ...BASE,
+      tools: [tool('write_file', '{"created":true}', calls)],
+      maxSteps: 2,
+      streamFetcher: scriptedFetcher('{"tool":"write_file","arguments":{"path":"a.py"}}'),
+    });
+
+    expect(turn.answer).toContain('limite de passos');
+    expect(turn.answer).toContain('write_file, write_file');
+    expect(turn.answer).toContain('confira o resultado antes de repetir a tarefa');
+    // And it must NOT claim the task failed.
+    expect(turn.answer).not.toContain('sem concluir');
+  });
+
+  it('does not blame a failure the model already recovered from', async () => {
+    // From a real trace: the model used `text` instead of `content` (validation
+    // error), then corrected itself and wrote the file, then wandered until the
+    // budget ran out. Reporting the early failure as the reason would point at
+    // the wrong thing — the advice must match what actually happened last.
+    let attempt = 0;
+    const flaky: AgentTool = {
+      name: 'write_file',
+      description: 'escreve um arquivo',
+      parameters: ['path', 'content'],
+      execute: async () => {
+        attempt += 1;
+        return attempt === 1 ? 'ERRO: content: expected string, received undefined' : '{"created":true}';
+      },
+    };
+
+    const turn = await runAgentTurn({
+      ...BASE,
+      tools: [flaky],
+      maxSteps: 3,
+      streamFetcher: scriptedFetcher(REPEATED_CALL),
+    });
+
+    expect(turn.answer).toContain('limite de passos sem dar uma resposta final');
+    expect(turn.answer).toContain('Ferramentas que responderam com sucesso: write_file');
+    expect(turn.answer).not.toContain('corrija o argumento');
+    expect(turn.answer).not.toContain('content: expected string');
+  });
+
+  it('keeps the plain advice when the budget ran out with nothing to show', async () => {
+    // Only unknown tools were asked for, so there is no partial work to report.
+    const turn = await runAgentTurn({
+      ...BASE,
+      tools: [],
+      maxSteps: 2,
+      streamFetcher: scriptedFetcher('{"tool":"nope","arguments":{}}'),
+    });
+
+    expect(turn.answer).toContain('limite de passos sem dar uma resposta final');
+    expect(turn.answer).toContain('Tente uma tarefa menor ou aumente o limite');
+    expect(turn.answer).not.toContain('Ferramentas que responderam');
+  });
+});
