@@ -34,12 +34,44 @@
     height: 100%;
   }
 
+  /*
+   * `color-scheme` is what the rendering *engine* reads to decide how to draw
+   * native widgets: the popup of a `<select>`, the list of a `<datalist>`,
+   * scrollbars, autofill and focus rings. Without it a dark page still gets
+   * **light** native popups, because light is the default.
+   *
+   * That is what made the provider picker unreadable: the menu is drawn by the
+   * platform (white), while its text colour comes from the element's own CSS
+   * (`text-slate-200`, near-white). White on white.
+   *
+   * Note this is NOT the `dark` class on `<html>`. That is a Tailwind convention
+   * for `dark:` variants in styles we write ourselves, and a native widget never
+   * sees it. Two different mechanisms, and only this one reaches the platform.
+   */
+  html {
+    color-scheme: dark;
+  }
+
   body {
     margin: 0;
     background-color: var(--color-ide-bg);
     color: rgb(226 232 240);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+  }
+
+  /*
+   * Belt and braces for option rows. `color-scheme` above is the correct
+   * mechanism and is usually sufficient, but engines have historically honoured
+   * it for scrollbars while still drawing `<option>` with their own colours.
+   * Setting both costs nothing and closes the failure mode completely.
+   *
+   * Scoped to `option` rather than to one component on purpose: this is a
+   * property of the dark theme, not of the provider picker.
+   */
+  option {
+    background-color: var(--color-ide-card);
+    color: rgb(226 232 240);
   }
 
   ::selection {
