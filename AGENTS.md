@@ -163,12 +163,21 @@ sh scripts/env-probe.sh            # relatório completo
 sh scripts/env-probe.sh --brief    # identidade + o essencial
 ```
 
-- **Máquina A** — a máquina de build. *Ainda não perfilada* (`VERIFICATION
-  REQUIRED`): rode o probe lá e preencha `docs/MACHINES.md`.
+**O probe checa se está máquina está perfilada.** Ele lê o próprio `machine-id` e
+procura em `docs/MACHINES.md`; se não achar, o relatório termina com
+`THIS MACHINE IS NOT PROFILED` e os passos. **Se isso aparecer, perfilar vem antes
+de qualquer outro trabalho** — leva um comando, e é o que decide se build, teste e
+Docker rodam localmente ou vão para o CI. A tarefa é **mecânica de propósito**:
+"lembrar de perfilar a outra máquina" morre com a sessão que teve a ideia, e este
+repositório é trabalhado por agentes que começam sem memória.
+
+- **Máquina A** — a máquina de build. **AINDA NÃO PERFILADA (tarefa em aberto)**
+  (`VERIFICATION REQUIRED`). Só quem roda o probe **lá** consegue fechar isso.
 - **Máquina B** — `juju-hppaviliong4notebookpc`, `machine-id` `3e798a6d`.
-  **Não compila** (sem `node`/`npm`/`cargo`) e **não roda o sandbox Docker**
-  (usuário fora do grupo `docker`). **Consegue** rodar o app empacotado
-  (WebKitGTK presente) e **exercitar o agente** (`ollama` rodando).
+  **Não compila** (sem `node`/`npm`/`cargo` para o Tauri) e não roda o TypeScript;
+  **consegue** rodar o app empacotado (WebKitGTK), **testar os módulos Rust
+  Tauri-free** (`src-tauri/harness`), **rodar o sandbox Docker** e **exercitar o
+  agente** (`ollama`).
 
 **A regra: quem consegue executar uma verificação é quem a relata.** Na máquina B,
 `lint`/`typecheck`/`test`/`build` e o Docker são delegados ao CI — leia o run,

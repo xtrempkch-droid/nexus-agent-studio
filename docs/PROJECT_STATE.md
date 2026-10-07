@@ -72,7 +72,9 @@ passo a passo falam com o core de verdade.
 >
 > **Isto agora é máquina, não acidente.** O perfil completo das **duas** máquinas
 > está em **`docs/MACHINES.md`**, e `scripts/env-probe.sh` responde em um comando
-> qual delas está em uso e o que ela consegue fazer. Rode antes de afirmar. O modelo local é `deepseek-r1:1.5b` via
+> qual delas está em uso e o que ela consegue fazer. **O probe também verifica se
+> esta máquina já está perfilada** e, se não estiver, termina dizendo isso —
+> perfilar vem antes de qualquer outro trabalho. Rode antes de afirmar. O modelo local é `deepseek-r1:1.5b` via
 Ollama (lento, sem GPU), mas agora **livremente selecionável na UI** (ver §5).
 
 No run **37404728248** (commit `ab839aa`) os 6 jobs originais passaram com todos os
@@ -535,15 +537,27 @@ limite** no tempo do agente (item 20).
 reais** (Ollama local) — foi assim que os defeitos dos itens 19 e 20 apareceram.
 
 **O que falta, em ordem de valor:**
+0. ⏳ **PERFILAR A MÁQUINA A — tarefa em aberto, e a única que eu não consigo
+   fechar.** Bloqueada porque o dono não tem acesso a essa máquina no momento
+   (2026-10-07); **qualquer IA que trabalhe lá** deve rodar
+   `sh scripts/env-probe.sh`, ver o bloco `THIS MACHINE IS NOT PROFILED` que o
+   probe imprime, e preencher `docs/MACHINES.md`. **Por que isso é mecânico e não
+   um lembrete:** o probe lê o próprio `machine-id` e procura no
+   `docs/MACHINES.md`; se não achar, ele mesmo pede — então a tarefa sobrevive à
+   sessão que a pensou, e não depende de ninguém ler uma lista. É o que decide se
+   build, teste e Docker rodam localmente naquela máquina ou vão para o CI.
+   **Não preencher por suposição:** os campos são medições, e "a máquina tem
+   suporte a tudo" é relato, não medida.
 1. **Reconstruir o `.exe` e usar o programa** — é a verificação que fecha o ciclo e a
    única que pode revelar o que o browser stubado não revela. Todas as correções
    estão em `main`, mas o binário que existe é anterior a elas.
-2. **Fila de requisições no sidecar** (§3 item 6-a do `PROJECT_STATE.md`): hoje
-   **toda** chamada de tool serializa no `Mutex` da sessão do core, então um turno
-   longo bloqueia qualquer outra tool. É a raiz que os itens 17 (coalescência) e 20
-   (sem prazo) apenas contornam. Candidata natural: uma fila com prioridade, ou
-   **worker pool** no Rust com `call_tool` deixando de segurar o mutex durante o
-   `ask_agent`.
+2. ✅ **Fila de requisições — FEITA** (§3 item 32). `src-tauri/src/worker.rs` tem
+   **uma thread dona da sessão**: nada é segurado durante a chamada, os pedidos são
+   atendidos em ordem de submissão (FIFO), e o orçamento conta desde a submissão.
+   O que **continua valendo** para quem escreve UI: o canal ainda é serializado,
+   então uma tool lenta adia as seguintes — debounce e no máximo uma chamada em voo
+   seguem sendo a regra. **Não** existe cancelamento: um pedido abandonado continua
+   rodando no core e o próximo espera por ele.
 3. **Era moderna da spec 2026-07-28** (`server/discover` + `_meta`, §3 item 6-d).
 4. **WASM** para `common/` (exige auditoria DOM-free).
 5. Não priorizados: plugin marketplace com assinatura, MCP remoto via Streamable

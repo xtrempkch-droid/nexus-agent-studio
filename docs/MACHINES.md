@@ -16,24 +16,49 @@ sh scripts/env-probe.sh --brief    # identity + the essentials
 `machine-id` (first 8 chars of `/etc/machine-id`) is the unambiguous
 fingerprint — hostnames get reused, hardware gets upgraded.
 
+**The probe checks this file.** It reads its own `machine-id` and looks for it
+below. If it is not found, the report ends with a loud `THIS MACHINE IS NOT
+PROFILED` block and the steps to add it. That is deliberate: "remember to profile
+the other machine" is a task that dies with the session that thought of it, and
+this repository is worked on by agents that start with no memory. Making the
+probe ask for itself is what keeps the job alive — no to-do list required, and
+no reliance on anyone choosing to read one.
+
+---
+
+## Action required: profile the machine you are on
+
+**If the probe reports `THIS MACHINE IS NOT PROFILED`, do this before other
+work.** It takes one command and it is what decides whether build, test and
+Docker verification can happen locally or must be delegated to CI.
+
+1. Run `sh scripts/env-probe.sh` and copy the output.
+2. Add a section below, in the same shape as the others, **headed by that
+   machine-id** — that heading is what the probe matches on, so without it the
+   check will keep asking.
+3. Record what the machine **cannot** do, not only what it can. The negatives are
+   the part that stops a session from reporting verification it never got.
+4. Add a one-line entry to the "At a glance" list at the bottom of this file.
+
 ---
 
 ## A — Build machine
 
-**Status: not yet profiled.** ⚠️ `VERIFICATION REQUIRED` — I have no access to
-this machine, so nothing about it is written here that I did not verify.
+**Status: NOT PROFILED — outstanding task.** ⚠️ `VERIFICATION REQUIRED`.
 
-The owner describes it as *"a machine that has support for everything"*. That is
-a **report, not a measurement**, and it is not specific enough to plan around.
-Fill this in by running, on that machine:
+Whoever runs `scripts/env-probe.sh` **on machine A** is the one who can close
+this: the probe will say `UNPROFILED` and print the machine-id to use as the
+heading. Nobody else can, because the fields below are measurements and this
+project's rule is that guessing them is worse than leaving them empty.
 
-```sh
-sh scripts/env-probe.sh
-```
+The owner reports it as *"a machine that has support for everything"*. That is a
+**report, not a measurement**, and it is not specific enough to plan around —
+"everything" does not say whether `cargo` is present, whether the Docker daemon
+answers, or whether WebKitGTK is installed for the app window.
 
 | Field | Value |
 | --- | --- |
-| `machine-id` | _(run the probe)_ |
+| `machine-id` | _(run the probe on A — this is the required heading)_ |
 | Hostname | _(run the probe)_ |
 | OS / kernel | _(run the probe)_ |
 | CPU / RAM | _(run the probe)_ |
@@ -44,6 +69,11 @@ sh scripts/env-probe.sh
 | `ollama` + models | _(run the probe)_ |
 
 **Do not guess these.** Paste the probe output; it is already formatted.
+
+Once filled in, also state the **verdict for A** in the same shape as B's: a
+`Can` / `Cannot` table. The `Cannot` column is the one that matters, because it is
+what tells the next session whether `lint`/`typecheck`/`test`/`build`, the Rust
+crate and the Docker sandbox are local or delegated.
 
 ---
 
@@ -84,7 +114,7 @@ those two modules testable **without** the GTK stack —
 
 ```sh
 export PATH="$HOME/.cargo/bin:$PATH"
-cd src-tauri/harness && cargo test      # 17 passed, 0.26 s
+cd src-tauri/harness && cargo test      # 26 passed, ~3 s
 ```
 
 — which is worth having because the full crate's `cargo test` in CI takes ~28 s
@@ -116,8 +146,23 @@ what no stub does (that is how §3 items 19–20 were found).
 
 **Whosever machine can execute a check is the one that reports it.**
 
+- **First, always:** `sh scripts/env-probe.sh`, on whichever machine you are
+  using. The machine you are on is the one thing you must not assume, and if the
+  probe says `UNPROFILED`, profiling it comes before other work.
 - On **B**: build, test and Docker verification are **delegated to CI**. Read the
   run, quote the annotation, and say plainly that it ran on GitHub and not here.
-- On **A**: the local loop is authoritative; run it before pushing.
-- On **either**: `sh scripts/env-probe.sh` first, every session, because the
-  machine you are on is the one thing you must not assume.
+- On **A**: presumed capable, but **not yet measured** — the local loop is
+  expected to be authoritative there, and that expectation is exactly what
+  profiling would confirm. Until then, do not assert it.
+
+---
+
+## At a glance
+
+| | Machine | `machine-id` | Profiled | Compiles | Docker | App window | Agent |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **A** | "machine with support for everything" | _unknown_ | ❌ **outstanding** | presumed, unverified | unknown | unknown | unknown |
+| **B** | `juju-hppaviliong4notebookpc` | `3e798a6d` | ✅ 2026-10-07 | ❌ no `node`/`npm` — CI only | ✅ native daemon | ✅ WebKitGTK | ✅ ollama |
+
+Keep this table and the sections above in step: the probe matches on the
+`machine-id` in the section headings, and the table is what a reader sees first.

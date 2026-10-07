@@ -70,6 +70,31 @@ if [ -r /proc/meminfo ]; then
   RAM=$(awk '/^MemTotal:/{printf "%.1f GB", $2/1048576}' /proc/meminfo)
 fi
 
+# --------------------------------------------------------- profile status ---
+# Is this machine written down in `docs/MACHINES.md`?
+#
+# This exists because "remember to profile the other machine" is a task that dies
+# with the session that thought of it. A profile that already exists makes the
+# probe say so; one that does not makes the probe **ask for itself**, in the file
+# an agent is already reading. No reliance on anyone remembering, and none on an
+# agent choosing to read a to-do list.
+#
+# Detection is deliberately the crudest thing that works: the machine-id appears
+# in the file, or it does not. When a machine is profiled its id is added there,
+# which registers it automatically — the check needs no upkeep of its own.
+MACHINES_DOC="$(dirname "$0")/../docs/MACHINES.md"
+PROFILED="unknown"
+if [ "$MID" = "n/a" ]; then
+  # No /etc/machine-id, so no identity to look up — macOS and BSD land here.
+  PROFILED="unknown"
+elif [ -r "$MACHINES_DOC" ]; then
+  if grep -q "$MID" "$MACHINES_DOC" 2>/dev/null; then
+    PROFILED="yes"
+  else
+    PROFILED="no"
+  fi
+fi
+
 printf '==========================================================\n'
 printf ' NexusAgent Studio — environment probe\n'
 printf '==========================================================\n'
@@ -78,6 +103,11 @@ printf ' machine-id  %s\n' "$MID"
 printf ' os          %s %s %s\n' "$OS" "$KERNEL" "$ARCH"
 [ -n "$DISTRO" ] && printf ' distro      %s\n' "$DISTRO"
 printf ' cpu         %s core(s), %s RAM\n' "$CORES" "$RAM"
+case "$PROFILED" in
+  yes) printf ' profile     known (see docs/MACHINES.md)\n' ;;
+  no) printf ' profile     *** UNPROFILED ***\n' ;;
+  *) printf ' profile     cannot tell (no machine-id on this system)\n' ;;
+esac
 
 # ------------------------------------------------------------- toolchain ---
 section "TOOLCHAIN (build)"
@@ -225,6 +255,24 @@ fi
 if [ "$CAN_BUILD" -eq 0 ]; then
   printf '\n  => This is NOT a build machine. GitHub Actions is the only compiler.\n'
   printf '     Do not report a lint/typecheck/test/build result you did not get.\n'
+fi
+
+# Deliberately the very last thing printed, after every other trailer: an
+# unprofiled machine is the one message that must not scroll past, and the end of
+# the output is where the eye lands. Anything after it would dilute it.
+if [ "$PROFILED" = "no" ]; then
+  printf '\n  ======================================================\n'
+  printf '  THIS MACHINE IS NOT PROFILED\n'
+  printf '  ======================================================\n'
+  printf '  Its machine-id (%s) does not appear in docs/MACHINES.md.\n' "$MID"
+  printf '  Before doing other work on this machine, add it:\n\n'
+  printf '    1. copy the report above into a new section of docs/MACHINES.md\n'
+  printf '    2. head that section with this machine-id (%s), because that is\n' "$MID"
+  printf '       what makes this check recognise it next time\n'
+  printf '    3. record what it CANNOT do — that is what decides whether build,\n'
+  printf '       test and Docker work must be delegated to CI\n\n'
+  printf '  Why it matters: assuming the wrong machine is how a session ends up\n'
+  printf '  reporting a test result it never obtained. See docs/MACHINES.md.\n'
 fi
 
 printf '\n  Brief form: sh scripts/env-probe.sh --brief\n'

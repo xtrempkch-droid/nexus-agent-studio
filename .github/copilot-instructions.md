@@ -6,6 +6,12 @@ Leia os dois antes de propor mudanças.
 
 ## Não negociáveis
 
+0. **Rode `sh scripts/env-probe.sh` antes de afirmar qualquer coisa sobre esta
+   máquina.** Ela responde o que aqui funciona e o que não funciona, e termina com
+   `THIS MACHINE IS NOT PROFILED` se o perfil dela ainda não estiver em
+   `docs/MACHINES.md` — nesse caso, **perfilar vem primeiro**. O projeto é
+   trabalhado de duas máquinas com capacidades diferentes, e assumir a errada é
+   como uma sessão acaba relatando um teste que nunca rodou.
 1. **Nunca invente APIs.** Verifique a assinatura na documentação oficial da
    versão declarada no `package.json`. Se não conseguir confirmar, escreva
    `VERIFICATION REQUIRED: <api>` em vez de fabricar.
