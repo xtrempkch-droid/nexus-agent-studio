@@ -124,6 +124,15 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   mutex* e a espera se acumula. Debounce e **no máximo uma em voo** (veja
   `flushEditorContext` em `App.tsx`). A solução de fundo é a fila no sidecar (§5
   item 6-a do `PROJECT_STATE.md`).
+- **O orçamento do agente tem quatro números espelhados entre camadas.** O padrão e o
+  teto do tempo (600 s, 24 h) vivem em `src-tauri/src/mcp.rs` (`tool_timeout`) e o
+  mínimo/máximo de passos em `common/agent/agentLoop.ts` (`DEFAULT_MAX_STEPS` /
+  `MAX_MAX_STEPS`); a UI **não pode importar valores** do core nem ler o Rust, então
+  `App.tsx` repete os quatro com comentário apontando a origem. Mudar um lado sem o
+  outro deixa o campo mostrando um número que a outra camada vai silenciosamente
+  trocar. **`0` é o único valor especial:** no tempo significa "sem prazo" (a espera
+  usa `recv()` sem deadline, não um número gigante — `Instant + Duration::MAX` entra
+  em pânico), e no tempo um valor positivo abaixo de 10 s sobe para 10 s.
 - **Testes são cross-platform (o CI roda em Ubuntu/Windows/macOS).** Nunca fixe
   strings que dependem de plataforma: use `pathToFileURL`/`fileURLToPath`,
   `isAbsolute`/`join` (`node:path`) e compare contra o mesmo helper em vez de um

@@ -57,27 +57,39 @@ pub const REQUESTED_PROTOCOL_VERSION: &str = "2026-07-28";
 /// one. Ten minutes is a ceiling for "the model is still thinking", not a target.
 pub const DEFAULT_TOOL_TIMEOUT_SECONDS: u64 = 600;
 
-/// Shortest tool-call timeout a caller may ask for, in seconds.
+/// Shortest **positive** tool-call timeout, in seconds.
+///
+/// A few seconds is not a timeout, it is a guaranteed failure: even `tools/list`
+/// cannot finish inside it, and the container tools have their own, longer, limit
+/// that this one would pre-empt.
 const MIN_TOOL_TIMEOUT_SECONDS: u64 = 10;
 
 /// Longest tool-call timeout a caller may ask for, in seconds (24 h).
 const MAX_TOOL_TIMEOUT_SECONDS: u64 = 86_400;
 
-/// Turn a caller-supplied timeout into a usable duration.
+/// Turn a caller-supplied timeout into a deadline, or into `None` for "no deadline".
 ///
 /// The webview owns this value because only the user knows how slow their model
 /// is: a turn is one `ask_agent` call, and a local model on CPU can need far more
-/// than the default while a hosted one needs seconds. It is clamped rather than
-/// rejected because the value arrives from a setting a human typed, and the two
-/// failure modes are both real: too small and even `tools/list` cannot finish,
-/// too large and a wedged core holds the session (and the UI waiting on it) for
-/// ever. `None` means "no preference", which is the default, not "no timeout".
-pub fn tool_timeout(requested: Option<u64>) -> Duration {
-    Duration::from_secs(
-        requested
-            .unwrap_or(DEFAULT_TOOL_TIMEOUT_SECONDS)
-            .clamp(MIN_TOOL_TIMEOUT_SECONDS, MAX_TOOL_TIMEOUT_SECONDS),
-    )
+/// than the default while a hosted one needs seconds.
+///
+/// - `None` means "no preference" and gets [`DEFAULT_TOOL_TIMEOUT_SECONDS`] — it is
+///   not "no timeout", because a client that says nothing should still not hang for
+///   ever on a wedged core.
+/// - `Some(0)` **is** "no timeout": wait as long as it takes. That is a deliberate
+///   request from the settings field, which spells it out, and it is the only way to
+///   run a task on a slow local model with no ceiling at all.
+/// - Any other value is clamped into the usable range: below
+///   [`MIN_TOOL_TIMEOUT_SECONDS`] the call is doomed, above the maximum a typo would
+///   hold the session (and the UI waiting on it) for ever.
+pub fn tool_timeout(requested: Option<u64>) -> Option<Duration> {
+    match requested {
+        None => Some(Duration::from_secs(DEFAULT_TOOL_TIMEOUT_SECONDS)),
+        Some(0) => None,
+        Some(seconds) => Some(Duration::from_secs(
+            seconds.clamp(MIN_TOOL_TIMEOUT_SECONDS, MAX_TOOL_TIMEOUT_SECONDS),
+        )),
+    }
 }
 
 /// What can go wrong while speaking to the core.
@@ -222,7 +234,7 @@ impl CoreSession {
             },
         }))?;
 
-        let response = self.await_response(id, "initialize", timeout)?;
+        let response = self.await_response(id, "initialize", Some(timeout))?;
         let result = unwrap_result(response)?;
 
         self.negotiated_version = result
@@ -250,7 +262,7 @@ impl CoreSession {
             "params": {},
         }))?;
 
-        let response = self.await_response(id, "tools/list", timeout)?;
+        let response = self.await_response(id, "tools/list", Some(timeout))?;
         let result = unwrap_result(response)?;
 
         let tools = result
@@ -269,11 +281,17 @@ impl CoreSession {
     /// The result is returned unshaped on purpose: a tool that fails still
     /// resolves with `isError: true` **inside** the result, which is an ordinary
     /// outcome for the caller to judge. Only protocol failures become `Err` here.
+    ///
+    /// `timeout` is `Option` because "no deadline" is a real request: a local model
+    /// can take longer than any ceiling a person is willing to type, and the user
+    /// who sets the agent timeout to zero is asking to wait as long as it takes.
+    /// The handshake keeps a fixed deadline on purpose — a core that never answers
+    /// `initialize` is broken, not slow.
     pub fn call_tool(
         &mut self,
         name: &str,
         arguments: Value,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> Result<Value, SessionError> {
         let id = self.allocate_id();
         self.send(&json!({
@@ -336,27 +354,45 @@ impl CoreSession {
     /// stdout is a single shared channel, so anything that is not the response we
     /// are waiting for — notifications, or replies to earlier requests — is
     /// skipped rather than treated as a failure.
+    /**
+     * Wait for one reply.
+     *
+     * `timeout` is the caller's setting; `None` means "wait indefinitely", which is
+     * what the UI asks for when the user sets the agent timeout to zero. Blocking
+     * without a deadline still notices a dead core, because the reader thread drops
+     * the sender when stdout closes.
+     */
     fn await_response(
         &mut self,
         id: u64,
         method: &str,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> Result<Value, SessionError> {
         let mut skipped = 0u32;
 
         loop {
-            let line = match self.responses.recv_timeout(timeout) {
-                Ok(line) => line,
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(SessionError::Timeout(format!(
-                        "no reply to {method} (id {id}) within {timeout:?} after skipping {skipped} message(s)"
-                    )))
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(SessionError::Protocol(format!(
-                        "the core closed stdout before replying to {method} (id {id})"
-                    )))
-                }
+            let line = match timeout {
+                Some(limit) => match self.responses.recv_timeout(limit) {
+                    Ok(line) => line,
+                    Err(RecvTimeoutError::Timeout) => {
+                        return Err(SessionError::Timeout(format!(
+                            "no reply to {method} (id {id}) within {limit:?} after skipping {skipped} message(s)"
+                        )))
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        return Err(SessionError::Protocol(format!(
+                            "the core closed stdout before replying to {method} (id {id})"
+                        )))
+                    }
+                },
+                None => match self.responses.recv() {
+                    Ok(line) => line,
+                    Err(_) => {
+                        return Err(SessionError::Protocol(format!(
+                            "the core closed stdout before replying to {method} (id {id})"
+                        )))
+                    }
+                },
             };
 
             let message: Value = serde_json::from_str(&line)?;
@@ -458,16 +494,19 @@ mod tests {
     #[test]
     fn the_tool_timeout_defaults_and_clamps() {
         // The webview supplies this value from a settings field a human typed, so
-        // both ends of the range are real: too small and even `tools/list` cannot
-        // finish, too large and a wedged core holds the session for ever. `None`
-        // must mean "no preference", never "no timeout".
-        let seconds = |requested| tool_timeout(requested).as_secs();
+        // every case here is reachable: too small and even `tools/list` cannot
+        // finish, too large and a wedged core holds the session for ever, and zero
+        // is the explicit request to wait with no deadline at all.
+        let seconds = |requested| tool_timeout(requested).map(|limit| limit.as_secs());
 
-        assert_eq!(seconds(None), DEFAULT_TOOL_TIMEOUT_SECONDS);
-        assert_eq!(seconds(Some(120)), 120);
-        assert_eq!(seconds(Some(0)), MIN_TOOL_TIMEOUT_SECONDS);
-        assert_eq!(seconds(Some(1)), MIN_TOOL_TIMEOUT_SECONDS);
-        assert_eq!(seconds(Some(u64::MAX)), MAX_TOOL_TIMEOUT_SECONDS);
+        // Silence means "no preference": the default deadline, not "no deadline".
+        assert_eq!(seconds(None), Some(DEFAULT_TOOL_TIMEOUT_SECONDS));
+        assert_eq!(seconds(Some(600)), Some(600));
+        // Zero is the one value that means "wait as long as it takes".
+        assert_eq!(seconds(Some(0)), None);
+        // Both ends are clamped into the usable range.
+        assert_eq!(seconds(Some(1)), Some(MIN_TOOL_TIMEOUT_SECONDS));
+        assert_eq!(seconds(Some(u64::MAX)), Some(MAX_TOOL_TIMEOUT_SECONDS));
     }
 
     #[test]
@@ -606,7 +645,7 @@ mod tests {
         let read = match session.call_tool(
             "read_file",
             json!({ "path": "package.json" }),
-            STEP_TIMEOUT,
+            Some(STEP_TIMEOUT),
         ) {
             Ok(result) => result,
             Err(error) => panic!("tools/call read_file failed after negotiating {version}: {error}"),
