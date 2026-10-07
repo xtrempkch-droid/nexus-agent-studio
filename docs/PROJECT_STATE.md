@@ -407,10 +407,12 @@ node dist/core.mjs      # core como MCP server stdio
     **Verificado:** 227 testes (eram 225; +2 em `agentTools.test.ts`) e, no browser
     com `window.__TAURI__` stubado: fechar a aba ativa passa para a vizinha (e a do
     meio passa para a que toma o lugar), 0 abas → editor vazio e **Salvar
-    desabilitado**, campos com padrão 600/6, clamp 10/86400 e 1/50, e o repasse
+    desabilitado**, campos com padrão 600/6, clamp 1/50 para passos, e o repasse
     chegando como `timeoutSeconds: 1800` **no comando** (fora dos argumentos da tool)
     e `maxSteps: 20` **nos argumentos**. A mensagem de timeout foi conferida
     injetando a falha do shell.
+    **O clamp do tempo mudou no item 20:** o mínimo agora é **0**, que significa
+    esperar sem limite.
 19. ✅ **O agente parou de mentir sobre o que aconteceu** — e a causa real de "a IA
     não cria os arquivos" apareceu. Primeira vez que o loop foi exercitado com
     **modelo real** (Ollama nesta máquina; a §2 dizia "não rodado contra o modelo").
@@ -441,27 +443,65 @@ node dist/core.mjs      # core como MCP server stdio
     os dois modos de falha (o `contents` inventado e responder em prosa sem chamar
     ferramenta). **Conclusão útil para o usuário:** com o padrão de 6 passos, criar 3
     arquivos fica no limite — a configuração do item 18 é o que resolve.
+20. ✅ **`0` no tempo do agente = esperar sem limite.** Ajuste pedido depois de usar o
+    programa: mesmo 600 s não bastam para um modelo local, e o resultado parecia
+    configuração quebrada. O mínimo do campo agora é **0**, e **0 significa sem
+    prazo** — espera o quanto o modelo precisar.
+    - **O shell representa isso honestamente, não com um número gigante:**
+      `mcp::tool_timeout` devolve `Option<Duration>` e a espera usa `recv()` sem
+      prazo em vez de `recv_timeout`. Um sentinela grande seria uma mina — `Instant +
+      Duration::MAX` entra em pânico — e ainda seria um prazo, só distante.
+    - **Duas assimetrias deliberadas:** valor **ausente** continua sendo o padrão
+      (um cliente que não diz nada não deve travar para sempre num core emperrado),
+      e valor **positivo pequeno** continua subindo para 10 s — alguns segundos não é
+      timeout, é falha garantida (nem `tools/list` termina). O campo explica as duas
+      e mostra **"sem limite de tempo"** em vez de "0.0 min".
+    - **Custo conhecido:** com 0 não há como destravar um turno pela UI, e
+      `ShellState::with_core` segura o `Mutex` durante a chamada — se o core emperrar,
+      só reiniciando o app. É aceitável porque é uma escolha explícita do usuário e
+      está escrito no próprio campo; a solução de fundo é a fila do §5 item 6-a.
+    **Verificado:** 235 testes (o caso do `tool_timeout` foi reescrito para cobrir
+    `Some(0) → None`, `None → 600 s`, e os dois clamps) e, no browser com o shell
+    stubado: padrão `600` com "10.0 min", `0` → campo mostra `0` e o rótulo vira
+    **"sem limite de tempo"**, `-5` → `0`, `5` → `10`, `min="0"` no input, e o
+    pedido sai com **`timeoutSeconds: 0`** — o que o shell traduz em `Some(0)`.
 
 ---
 
-**Ao retomar.** Todo o **LSP bridge** (§5 item 14) está implementado e mergeado:
-cliente, orquestração, tools MCP (`get_diagnostics`, `configure_language_server`,
-`list_language_servers`) e fiação na UI. O `get_editor_context` também deixou de ser
-placeholder (§5 item 17), o agente tem **orçamento configurável** (tempo e passos,
-§5 item 18) e as falhas do turno são **relatadas honestamente** (§5 item 19). A
-correção do travamento da janela está em `main` desde o
-PR #8 (§3 item 24 — falta só **reconstruir o `.exe`**). O **sandbox Docker passou a
-funcionar de fato** (§3 itens 25–28): era o último pedaço da fase 3 que só tinha
-teste unitário, e agora está verificado em runtime compilando C de verdade. O que
-resta é **melhoria** — conciliada com o `docs/roadmap.md` ("Next"): (1) fila de
-requisições no sidecar em vez do mutex bloqueante (§5 item 6-a) — hoje **toda**
-chamada de tool serializa na sessão do core, e é isso que transforma "digitar
-enquanto a IA pensa" em espera acumulada (o item 17 contornou com coalescência, mas
-a raiz continua sendo o mutex); (2) era moderna da spec 2026-07-28 (§5 item 6-d);
-(3) WASM target para `common/` (exige auditoria DOM-free). Itens de
-roadmap ainda não priorizados: plugin marketplace com assinatura, MCP remoto via
-Streamable HTTP, integração DAP. Para retomar comigo, ler §3 linhas 16–23
-(histórico recente) e `/memories/repo/build-and-verify.md` (armadilhas já pagas).
+**Ao retomar.** Última sessão (2026-10-06) entregou, em PRs mergeados: **streaming**
+do agente (#1), **seletor de modelo livre** (#2), **abrir projeto/pasta/arquivo** (#3),
+**`.gitignore`** no explorador (#4), **LSP completo** (#5, #6), **ajustes de UI** e a
+correção do **travamento da janela** (#7, #8 — `async` + `spawn_blocking`), o
+**contexto do editor** alimentado pela UI com coalescência (#8, #9), o **sandbox
+Docker funcionando de fato** (#10 — dois bugs reais: argv sem o binário `docker` e
+container rodando como root), as **abas fecháveis + orçamento do agente** (#11) e o
+**relato honesto das falhas do turno** (#12). Nesta fatia: **`0` = esperar sem
+limite** no tempo do agente (item 20).
+
+**Estado:** `main` verde, 235 testes, `cargo check`/`cargo test` verdes no CI. O
+**sandbox compila e roda C de verdade**; o **agente foi exercitado contra modelos
+reais** (Ollama local) — foi assim que os defeitos dos itens 19 e 20 apareceram.
+
+**O que falta, em ordem de valor:**
+1. **Reconstruir o `.exe` e usar o programa** — é a verificação que fecha o ciclo e a
+   única que pode revelar o que o browser stubado não revela. Todas as correções
+   estão em `main`, mas o binário que existe é anterior a elas.
+2. **Fila de requisições no sidecar** (§3 item 6-a do `PROJECT_STATE.md`): hoje
+   **toda** chamada de tool serializa no `Mutex` da sessão do core, então um turno
+   longo bloqueia qualquer outra tool. É a raiz que os itens 17 (coalescência) e 20
+   (sem prazo) apenas contornam. Candidata natural: uma fila com prioridade, ou
+   **worker pool** no Rust com `call_tool` deixando de segurar o mutex durante o
+   `ask_agent`.
+3. **Era moderna da spec 2026-07-28** (`server/discover` + `_meta`, §3 item 6-d).
+4. **WASM** para `common/` (exige auditoria DOM-free).
+5. Não priorizados: plugin marketplace com assinatura, MCP remoto via Streamable
+   HTTP, integração DAP.
+
+**Armadilhas já pagas** (leia antes de mexer): `AGENTS.md` (invariantes) e as linhas
+do §3 — em especial 24 (CI "parado" era branch mergeado sem evento), 25–26 (argv do
+sandbox e root no container: **teste com dublê não pega contrato de argv**) e 27–28
+(as duas limitações deste host). Ver também
+`/memories/repo/build-and-verify.md`.
 
 ## 6. Decisões e correções em relação ao prompt original
 
