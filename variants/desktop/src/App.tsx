@@ -196,9 +196,12 @@ const CONTEXT_DEBOUNCE_MS = 400;
  */
 const DEFAULT_TOOL_TIMEOUT_SECONDS = 600;
 
-/** Shortest and longest timeout accepted, mirroring the clamp in `mcp::tool_timeout`. */
-const MIN_TOOL_TIMEOUT_SECONDS = 10;
+/** Shortest and longest timeout accepted, mirroring `mcp::tool_timeout`. */
+const MIN_TOOL_TIMEOUT_SECONDS = 0;
 const MAX_TOOL_TIMEOUT_SECONDS = 86_400;
+
+/** The shortest **positive** timeout the shell honours; `0` means "no limit". */
+const MIN_POSITIVE_TIMEOUT_SECONDS = 10;
 
 /**
  * How many model round-trips one turn may use.
@@ -214,14 +217,28 @@ const MAX_MAX_STEPS = 50;
 /**
  * Clamp a typed timeout to the range the shell will honour.
  *
- * Clamped here as well as in the shell so the field never displays a number that
- * the shell is quietly going to change.
+ * Clamped here as well as in the shell so the field never displays a number the
+ * shell is quietly going to change. Zero passes through: it is the documented
+ * "wait indefinitely", the only way to run a task on a slow local model with no
+ * ceiling at all.
  */
 function clampTimeoutSeconds(value: number): number {
   if (!Number.isFinite(value)) {
     return DEFAULT_TOOL_TIMEOUT_SECONDS;
   }
-  return Math.min(MAX_TOOL_TIMEOUT_SECONDS, Math.max(MIN_TOOL_TIMEOUT_SECONDS, Math.round(value)));
+  const rounded = Math.round(value);
+  if (rounded <= 0) {
+    return 0;
+  }
+  return Math.min(
+    MAX_TOOL_TIMEOUT_SECONDS,
+    Math.max(MIN_POSITIVE_TIMEOUT_SECONDS, rounded),
+  );
+}
+
+/** How a timeout value reads in the settings UI. */
+function describeTimeoutSeconds(value: number): string {
+  return value === 0 ? 'sem limite de tempo' : `${(value / 60).toFixed(1)} min`;
 }
 
 /** Clamp a typed step budget to the range the core will honour. */
@@ -974,7 +991,9 @@ export default function App() {
       // A timeout is the one agent failure the user can fix from the UI, and the
       // raw message ("no reply to tools/call … within 600s") does not say how.
       const hint = message.includes('timeout')
-        ? ` — aumente o "Tempo do agente" nas configurações (agora ${String(toolTimeoutSeconds)} s)`
+        ? ` — aumente o "Tempo do agente" nas configurações (agora ${describeTimeoutSeconds(
+            toolTimeoutSeconds,
+          )})`
         : '';
       finishStreamingMessage(`Falha ao executar o agente: ${message}${hint}`);
     },
@@ -1670,7 +1689,11 @@ export default function App() {
                 <p className="text-[10px] leading-relaxed text-slate-500">
                   Quanto tempo uma resposta da IA pode demorar antes de virar erro de
                   timeout. Um modelo local em CPU precisa de minutos — se a IA for
-                  interrompida antes de terminar a tarefa, aumente aqui. Padrão:{' '}
+                  interrompida antes de terminar a tarefa, aumente aqui. Use{' '}
+                  <span className="font-mono text-slate-400">0</span> para esperar{' '}
+                  <strong className="font-medium text-slate-400">sem limite de tempo</strong>{' '}
+                  (a IA pode levar o quanto precisar; um valor entre 1 e 9 é ajustado para{' '}
+                  {String(MIN_POSITIVE_TIMEOUT_SECONDS)} s). Padrão:{' '}
                   {String(DEFAULT_TOOL_TIMEOUT_SECONDS)} s ({DEFAULT_TOOL_TIMEOUT_SECONDS / 60} min).
                 </p>
                 <div className="flex items-center gap-2">
@@ -1696,7 +1719,7 @@ export default function App() {
                     className="w-28 rounded border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
                   />
                   <span className="text-[10px] text-slate-500">
-                    segundos ({(toolTimeoutSeconds / 60).toFixed(1)} min)
+                    segundos ({describeTimeoutSeconds(toolTimeoutSeconds)})
                   </span>
                   <button
                     type="button"
