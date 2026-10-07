@@ -249,6 +249,32 @@ node dist/core.mjs      # core como MCP server stdio
    `common/` headless. O custo é exigir um runtime Node na máquina, ou empacotar um.
 7. Avaliar se o Monaco volta a ser usado (foi trocado por `<textarea>` para não
    adicionar dependência não verificada).
+
+⏸️ **ADIADO — empacotar para Windows e macOS.** Decidido em 2026-10-07: deixar para
+    quando o projeto estiver pronto. A análise fica registrada para não ser refeita
+    do zero:
+    - **Não é questão de custo** — o repositório é público, então os minutos do
+      Actions são gratuitos em todos os sistemas.
+    - **O obstáculo é a montagem do bundle**, que é shell POSIX: `apt-get` para as
+      libs, `command -v node` (no Windows é `node.exe`), `chmod +x`, um `RUN.sh`
+      com `readlink -f`/`[[ ]]`, `du -sh`/`ls -la`/`timeout` (coreutils) e
+      `set -euo pipefail` — sendo que o shell padrão do runner Windows é
+      PowerShell, então **todo** bloco `run: |` falharia. Não é "acrescentar um
+      item à matriz": é uma **segunda implementação** do empacotamento.
+    - **`--no-bundle` evita os ícones, e só existe um PNG.** `tauri.conf.json`
+      aponta `icon: ["icons/icon.png"]`; não há `.ico` nem `.icns`.
+    - **macOS tem duas arquiteturas.** `macos-latest` é ARM; um binário ARM não
+      roda em Mac Intel. E binário baixado da internet é bloqueado por
+      quarentena sem assinatura — `VERIFICATION REQUIRED` neste caso, não medido.
+    - **O que já existe:** o workflow `build` roda `lint → typecheck → test →
+      build → smoke` em ubuntu/windows/macos × node 22/24, então o **código** é
+      verificado nas três. O que falta é o **pacote distribuível**. O Rust já é
+      cross-platform (`shellArgv` tem ramo `win32`; `bridge.rs` omite `--user` no
+      Windows; `main.rs` tem `windows_subsystem`).
+    - **Caminho barato, se e quando voltar:** adicionar `windows-latest` e
+      `macos-latest` ao `desktop-binary` só para **compilar** (`tauri build
+      --no-bundle`, sem montar bundle nem publicar artefato). Provaria que o shell
+      Tauri compila nos dois — verificação que hoje **não existe**.
 8. ✅ **Aviso de depreciação resolvido.** `actions/checkout@v4`,
    `actions/setup-node@v4` e `actions/upload-artifact@v4` miravam o Node 20, deprecado
    nos runners. Todos foram para `@v5`, **depois de confirmar as tags** com

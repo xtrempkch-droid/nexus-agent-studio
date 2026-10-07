@@ -6,15 +6,24 @@
 
 ```
 common/            Headless, UI-agnostic core (no DOM, no React)
+  agent/           LLM loop: prompt-built tool calling, streaming, step budget
   debug/           Event-sourced ExecutionLogger + inline hints
-  docker/          Docker sandbox runner + compiler error parser
+  docker/          Docker sandbox runner, local (unisolated) runner, error parser
+  lsp/             Language Server Protocol client, transport, manager
   mcp/             InternalMCPServer + MCP tools
   plugins/         Plugin contracts + PluginManager
   security/        Path traversal guard
   themes/          Reactive ThemeManager
 variants/          UI/platform targets built on top of common/
-  desktop/         React 19 + Tailwind v4 desktop shell
+  desktop/         React 19 + Tailwind v4 desktop shell (runs in the webview)
+src-tauri/         Rust host: owns the window and the single core session
+  src/bridge.rs    Process plumbing (spawn, boot detection) — Tauri-free
+  src/mcp.rs       MCP client over the child's stdio — Tauri-free
+  src/worker.rs    Request queue in front of the session — Tauri-free
+  src/main.rs      Tauri commands; the only file needing the GTK stack
+  harness/         Standalone crate that compiles the Tauri-free modules to test them
 plugins/           First-party plugins (.plg.ts) using the plugin contract
+scripts/           smoke-mcp.ts, env-probe.sh
 layout/            Static HTML design references (not part of the build)
 docs/              This documentation
 ```
@@ -30,7 +39,9 @@ Public surface is re-exported from `common/index.ts`:
 | Module | Responsibility |
 | --- | --- |
 | `common/mcp/server.ts` | `InternalMCPServer`, a lifecycle wrapper over the MCP v2 `McpServer` factory |
-| `common/mcp/tools/*` | Built-in tools: file I/O, editor context, Docker terminal |
+| `common/mcp/tools/*` | Built-in tools: file I/O, editor context, Docker terminal, LSP, models, agent |
+| `common/agent/*` | The LLM loop — prompt-built tool calling, streaming, step budget |
+| `common/lsp/*` | LSP client (transport-agnostic), stdio transport, diagnostics → hints |
 | `common/debug/logger.ts` | Immutable, append-only `ExecutionLogger` (event sourcing) |
 | `common/docker/*` | Container isolation, resource limits, stream separation, error parsing |
 | `common/plugins/*` | `PluginManifest` / `PluginContext` / `PluginLifecycle` + `PluginManager` |
@@ -70,47 +81,70 @@ runtime. The desktop variant is bundled with Vite.
 
 ## 4. Communication flow
 
+**The UI never talks to the core directly.** The webview cannot: the core is a
+Node process reached over stdio, and `node:*` does not exist in a browser. Every
+call crosses the Tauri boundary into the Rust host, which owns the single core
+session and queues requests in front of it.
+
 ```mermaid
 flowchart LR
-    subgraph UI["variants/desktop (React)"]
+    subgraph UI["variants/desktop (React, in the webview)"]
         Chat[Agent Chat]
         Term[TerminalOutput]
         Exp[File Explorer]
     end
 
-    subgraph Core["common/ (headless)"]
+    subgraph Shell["src-tauri (Rust host)"]
+        Cmd["commands:\ncall_core_tool, pick_workspace, ..."]
+        Queue["CoreWorker:\none thread, FIFO queue"]
+    end
+
+    subgraph Core["common/ (headless, Node process)"]
         MCP[InternalMCPServer]
+        Agent[agent loop]
+        LSP[lsp bridge]
         Log[ExecutionLogger]
         Hints[InlineHintManager]
         Theme[ThemeManager]
     end
 
     subgraph Sandbox["Docker Sandbox"]
-        C[("container\n--rm --cap-drop=ALL\n--network=none\n--memory=512m")]
+        Container[("container")]
     end
 
-    Chat -->|callTool| MCP
-    Exp -->|read_file / list_directory| MCP
+    UI -->|"lib/shell.ts\n(window.__TAURI__)"| Cmd
+    Cmd --> Queue
+    Queue -->|"stdio: newline-delimited JSON-RPC"| MCP
+    MCP --> Agent
+    MCP --> LSP
     MCP -->|write_file| Log
-    MCP -->|run_terminal_command| C
-    C -->|stdout / stderr| Parser[Compiler Error Parser]
+    MCP -->|run_terminal_command| Container
+    Container -->|stdout / stderr| Parser[Compiler Error Parser]
     Parser -->|diagnostics| Hints
     Parser -->|exit code, duration| Log
     Log -->|subscribe| Term
     Hints -->|getHintsForFile| Chat
     Theme -->|pub/sub tokens| UI
+    Queue -.->|"notifications/agent/stream\n(Tauri events)"| UI
 ```
 
-1. The UI (or an agent) invokes a tool through `InternalMCPServer`.
-2. File mutations are recorded as immutable `LogEntry` objects by the
+1. The UI calls a shell command through `lib/shell.ts` — the **only** module that
+   knows how the webview reaches the host. In a plain browser nothing is injected
+   and every call rejects, which is what lets the UI degrade honestly.
+2. The command becomes a **job** on the worker's queue. The worker owns the core
+   session, holds nothing while the core works, and answers in submission order —
+   see `worker.rs` for why the budget is measured from submission.
+3. File mutations are recorded as immutable `LogEntry` objects by the
    `ExecutionLogger` (`author: 'AI' | 'USER' | 'SYSTEM'`).
-3. `run_terminal_command` hands the command to the Docker sandbox, which
+4. `run_terminal_command` hands the command to the Docker sandbox, which
    enforces isolation flags, captures **stdout and stderr separately**, and
    returns exit code + wall-clock duration.
-4. Compiler output from `stderr` is parsed; each diagnostic is attached as an
+5. Compiler output from `stderr` is parsed; each diagnostic is attached as an
    `InlineHint` at the exact file/line, and the container run is recorded in the
    logger.
-5. UI subscribers re-render from the event stream — nothing polls.
+6. UI subscribers re-render from the event stream — nothing polls. Agent stream
+   deltas arrive the other way, as core **notifications** forwarded to webview
+   events, so streaming never competes with a pending request.
 
 ## 5. Security model
 
@@ -138,14 +172,39 @@ current verified set is:
 
 - `@modelcontextprotocol/server` / `client` / `core` — **v2** (spec 2026-07-28)
 - `zod` v4 via the `zod/v4` subpath
-- `typescript` 7.x toolchain
+- `typescript` **`~6.0.2`** — **not 7.x.** `typescript-eslint@8` declares
+  `peerDependencies.typescript: ">=4.8.4 <6.1.0"`, so TS 7 makes `npm install` abort
+  with ERESOLVE and every later step is skipped. See `README.md` for the full note.
 - `react` 19.x (there is no React 20)
 - `tailwindcss` 4.x CSS-first `@theme` (there is no Tailwind 5)
 
 ## 7. Testing
 
+### TypeScript
+
 `vitest` runs against `common/**` and `plugins/**` in Node. The Docker sandbox
 takes an injectable command executor (`CommandExecutor`) so tests can assert the
 exact `docker run` argv without a daemon — which is also why the unit tests could
 not notice that the argv was missing the `docker` binary itself (see
-`docs/PROJECT_STATE.md` §3, item 25).
+`docs/PROJECT_STATE.md` §3, item 25). **That is the lesson worth keeping:** a test
+whose only subject is a double has verified the double. Changes to argv, or to any
+contract with an external process, need at least one test that runs a real one.
+
+### Rust
+
+The three Tauri-free modules (`bridge.rs`, `mcp.rs`, `worker.rs`) are compiled by a
+standalone crate in `src-tauri/harness`, which pulls them in by `#[path]` so there
+is no copy to drift:
+
+```sh
+cd src-tauri/harness && cargo test      # seconds; needs only cargo
+```
+
+`main.rs` — the Tauri command layer — **cannot** be built there: it needs the GTK
+and WebKitGTK development packages, a system-level install. It is compiled and
+type-checked by the `tauri` workflow in CI, which is also what runs the
+`#[ignore]`d end-to-end handshake against the real core.
+
+So the boundary is: **a change confined to the three modules is verifiable
+locally; a change touching `main.rs` needs CI.** `rustfmt` will at least parse
+`main.rs` without any dependencies, which catches syntax errors before a push.
