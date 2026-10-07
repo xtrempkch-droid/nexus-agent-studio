@@ -1,0 +1,7 @@
+# Cargo's build output for the harness.
+#
+# Needed here rather than in `src-tauri/.gitignore`: that file's `/target/` is
+# anchored to `src-tauri/`, so it matches the shell's build directory and not
+# this one. Without this file the harness's ~70 MB of objects show up as
+# untracked and are one careless `git add -A` away from being committed.
+/target/

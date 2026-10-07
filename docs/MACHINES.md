@@ -58,7 +58,7 @@ sh scripts/env-probe.sh
 | OS / kernel | Ubuntu 25.10 (Questing Quokka) · Linux 6.17.0-41-generic · x86_64 |
 | CPU / RAM | AMD A4-3300M APU, **2 cores** · 5,3 GB · 49 GB free |
 | `node` / `npm` / `npx` | **ABSENT** (no nvm/volta/fnm/snap; apt offers Node 20, below the `>=22` floor) |
-| `cargo` / `rustc` | **ABSENT** (no `~/.cargo`) |
+| `cargo` / `rustc` | **1.99.0** — installed 2026-10-07 via `rustup --profile minimal --no-modify-path`, user space, no `sudo`. **Not on `PATH` by default**: prepend `$HOME/.cargo/bin`. |
 | Docker | **29.7.2, daemon WORKS** — native `/var/lib/docker`, user in the `docker` group |
 | WebKitGTK 4.1 + GTK 3 | **present** — a Tauri window opens |
 | `ollama` | **0.35.1 running** · `deepseek-r1:1.5b` (local, 1.1 GB) + one cloud model |
@@ -70,25 +70,40 @@ sh scripts/env-probe.sh
 
 | Can | Cannot |
 | --- | --- |
-| read and write code, commit, push | **build** (`lint`/`typecheck`/`test`/`build`) |
-| follow CI results on GitHub | **compile the Rust shell** (`cargo`) |
-| **run the packaged app** (WebKitGTK present) | install system packages (`sudo` needs a password) |
-| **exercise the agent against a real model** (ollama present) | run the *tests* of the sandbox (no Node) |
-| **run the Docker sandbox** (daemon works — verified live) | anything needing ≥ 3 cores or a GPU |
+| read and write code, commit, push | **build the TypeScript** (`lint`/`typecheck`/`test`/`build`) |
+| follow CI results on GitHub | **compile `src-tauri/src/main.rs`** (no `pkg-config`, no GTK/WebKit dev libs) |
+| **test the Tauri-free Rust modules** (`bridge.rs`, `mcp.rs`) | install system packages (`sudo` needs a password) |
+| **run the packaged app** (WebKitGTK present) | anything needing ≥ 3 cores or a GPU |
+| **run the Docker sandbox** (daemon works — verified live) | |
+| **exercise the agent against a real model** (ollama present) | |
 | validate YAML/`bash -n` (python3 + PyYAML) | |
 
-One consequence that keeps biting:
+The Rust line changed on 2026-10-07: `rustup` installs entirely in user space
+(`~/.cargo`, `~/.rustup`), so no `sudo` was needed. `src-tauri/harness` then made
+those two modules testable **without** the GTK stack —
 
-**It is not a build machine.** GitHub Actions is the only compiler. A green
-local-looking claim that was never executed is worse than saying "not verified
-here".
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+cd src-tauri/harness && cargo test      # 17 passed, 0.26 s
+```
 
-What *changed* on 2026-10-07: adding the user to the `docker` group turned the
-sandbox from "installed but denied" into "usable", so the sandbox can now be
-**verified live on B** — not through `npm test` (still no Node), but by running
-the exact argv the sandbox builds. That is how item 27's `no-new-privileges`
-limitation was found **not** to reproduce here; see `PROJECT_STATE.md` §3 item 30
-for the measurement and what it does and does not settle.
+— which is worth having because the full crate's `cargo test` in CI takes ~28 s
+and needs the system libraries. It also draws a firm boundary: **`main.rs` is
+still CI-only.** `pkg-config` is absent and the `glib`/`gtk`/`webkit` development
+packages are not installed, and installing them needs a password.
+
+Two consequences that keep biting:
+
+**It is not a build machine.** GitHub Actions is the only compiler for the
+TypeScript and for the Tauri command layer. A green local-looking claim that was
+never executed is worse than saying "not verified here".
+
+What also *changed* on 2026-10-07: adding the user to the `docker` group turned
+the sandbox from "installed but denied" into "usable", so the sandbox can now be
+**verified live on B** by running the exact argv the sandbox builds. That is how
+item 27's `no-new-privileges` limitation was found **not** to reproduce here; see
+`PROJECT_STATE.md` §3 item 30 for the measurement and what it does and does not
+settle.
 
 The weak CPU bounds the agent's usefulness: a local model runs, but slowly.
 That is a reason to prefer small models here and to keep agent turns short, not

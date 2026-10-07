@@ -58,15 +58,17 @@ passo a passo falam com o core de verdade.
 
 > ⚠️ **AMBIENTE — re-verificado em 2026-10-07.** A nota anterior aqui afirmava que
 > "a máquina agora tem `node` 22 + `npm` 9, Rust via `rustup` e `docker`
-> funcionando". **Duas das três eram falsas:** `node`/`npm` e `cargo`/`rustc`
-> continuam **ausentes** (nenhum nvm/volta/fnm/snap; o candidato do apt é Node 20,
-> abaixo do piso `>=22`). **O `docker` mudou de fato:** o usuário foi adicionado ao
-> grupo `docker` (`sudo usermod -aG docker $USER` + nova sessão de login), o daemon
-> responde e o sandbox passou a ser **verificável nesta máquina** — ver §3 item 30.
-> **Consequência:** `npm install`/`lint`/`typecheck`/`test`/`build` **não** rodam
-> aqui e **o CI continua sendo o único compilador** — não declare verificação local
-> que você não obteve. O que **falta** segue igual: `sudo` sem senha, então o
-> `cargo check` **completo** do `main.rs` depende do CI (`tauri.yml`).
+> funcionando". **Uma das três era falsa na época e as outras duas mudaram depois:**
+> `node`/`npm` continuam **ausentes** (nenhum nvm/volta/fnm/snap; o candidato do apt
+> é Node 20, abaixo do piso `>=22`), então **`npm install`/`lint`/`typecheck`/`test`/
+> `build` não rodam aqui e o CI continua sendo o único compilador de TypeScript**.
+> **O `docker` mudou de fato:** usuário adicionado ao grupo `docker`, daemon
+> responde e o sandbox passou a ser verificável aqui (§3 item 30). **E o `cargo`
+> também:** instalado em **user-space** via `rustup` (§3 item 31), o que deu aos
+> módulos Rust Tauri-free um ciclo de teste local que eles nunca tiveram. O que
+> **falta** segue igual: `sudo` sem senha, então compilar `src-tauri/src/main.rs`
+> (que exige `pkg-config` + libs GTK/WebKitGTK de sistema) depende do CI
+> (`tauri.yml`).
 >
 > **Isto agora é máquina, não acidente.** O perfil completo das **duas** máquinas
 > está em **`docs/MACHINES.md`**, e `scripts/env-probe.sh` responde em um comando
@@ -126,6 +128,7 @@ com `../` é recusado; e o servidor continua respondendo depois dos dois erros.
 | 28 | O Docker do **snap** tem `/tmp` privado → workspace em `/tmp` monta **vazio** | 🟡 **LIMITAÇÃO DE HOST (só o Docker do snap) — NÃO se aplica ao notebook.** No host X o daemon era o snap (`Operating System: Ubuntu Core 24`, `Docker Root Dir: /var/snap/docker/...`): arquivos criados no container num bind de `/tmp` **não apareciam** no host e vice-versa, enquanto `/home` funcionava nos dois sentidos. Consequência lá: um projeto dentro de `/tmp` montava um `/workspace` vazio e o agente compilava contra o nada — falha confusa, não erro. **Medido em 2026-10-07 no notebook:** o daemon é **nativo** (`DockerRootDir=/var/lib/docker`, `Ubuntu 25.10`) e `/tmp` monta **nos dois sentidos** (§3 item 30) — nada a corrigir aqui. Detectar isso continua valendo para quem usar snap (comparar a listagem do host com a do container uma vez por troca de workspace e avisar), mas **não** é um defeito do produto. |
 | 29 | **O dono testava um binário de 22 h antes e relatava bugs já corrigidos.** | ⚠️ **ARMADILHA RECORRENTE — leia antes de "consertar" uma queixa.** Em 2026-10-07 o relato era "abre mas não consigo abrir pastas/arquivos, e as configurações de IA estão presas no Ollama" — **tudo isso já estava corrigido em `main`**. O `dist/core.mjs` do bundle baixado (6/out 05:24) expunha **5 tools**; o de `main` expõe **11**. Faltavam justamente `ask_agent` (chat real), `list_models` (sincronizar provedor/modelo), `set_editor_context` e as três de LSP. **Prova direta, não inferência por data:** `grep -c registerTool` no `core.mjs` do bundle, ou procurar os nomes das tools. **Consequência de processo:** o `desktop-binary` só roda em `push`, e **nada avisa o dono que o artefato mudou**. Antes de investigar qualquer queixa de comportamento, **confirme a idade do bundle** (`ls -la ~/Downloads/nexus-agent-studio-linux-x64/dist/core.mjs` e a contagem de tools) — metade das "regressões" some quando o binário é atual. |
 | 30 | **O sandbox foi verificado ao vivo nesta máquina — e duas limitações documentadas NÃO se reproduzem aqui** | ✅ **VERIFICADO em 2026-10-07, primeira vez nesta máquina.** Com o usuário no grupo `docker`, o argv **exato** do `buildArgv` foi reproduzido à mão (imagem `alpine`, sem Node — não dá para rodar `npm test`, mas dá para rodar o comando). Resultados: **(a)** o container roda e `--user 1000:1000` funciona — o arquivo criado sai no host como `juju juju`, **editável e apagável** (item 26 confirmado aqui, o problema de dono `root` não ocorre); **(b)** `CapEff: 0000000000000000` — todas as capabilities caem, como projetado; **(c)** `--network none` bloqueia a rede (`bloqueada`); **(d)** `--rm` não deixa container; **(e)** `/tmp` monta normalmente **nos dois sentidos**, `DockerRootDir=/var/lib/docker`. **Duas correções de escopo:** o **item 27 NÃO se reproduz aqui** — `--security-opt no-new-privileges` executa `execve` sem problema neste kernel (`6.17.0-41` + Docker nativo 29.7.2), então a limitação era **daquele host, não universal**, e o escape `NEXUS_SANDBOX_NO_NEW_PRIVILEGES=0` **não é necessário nesta máquina**; e o **item 28 não se aplica** — este daemon é nativo, não o snap, então o `/tmp` privado não existe aqui. **Não feito, e dito para não parecer mais do que é:** o E2E de `gcc:latest` (`gcc -o programa main.c && ./programa`) **não** foi repetido aqui — a imagem tem ~1,2 GB e não foi baixada; o que ficou provado é o mecanismo do sandbox, não o ciclo de compilação. |
+| 31 | **Os módulos Rust Tauri-free não tinham ciclo de teste local** | ✅ **RESOLVIDO.** `cargo check`/`cargo test` do crate completo exigem `pkg-config` + libs GTK/WebKitGTK de sistema, que esta máquina não tem e cuja instalação pede senha. Então `bridge.rs` e `mcp.rs` — escritos Tauri-free de propósito, exatamente para poderem ser testados sem janela — só eram verificados **depois do push**. Duas partes: **(a)** `rustup` instala inteiro em user-space (`~/.cargo`, `~/.rustup`), sem `sudo` — medido, `cargo 1.99.0`; **atenção ao `PATH`**: a instalação foi `--no-modify-path`, então o probe procura nos **dois** lugares e avisa quando está fora do `PATH`. **(b)** Criado `src-tauri/harness/`, um crate standalone que inclui os dois arquivos **por caminho** (`#[path]`, não cópia — cópia passaria enquanto o arquivo real quebrasse). Resultado: `17 passed` em **0.26 s**, contra ~28 s do crate completo no CI. **A contrapartida, escrita no próprio harness:** um teste aqui só vale para estes dois módulos; exercitar `main.rs` (um comando Tauri) continua sendo CI. `Cargo.lock` commitado para reprodutibilidade, e o `.gitignore` do harness existe porque o `/target/` do `src-tauri/.gitignore` é **ancorado** e não pega o subdiretório — 72 MB apareceriam como untracked. |
 
 ## 4. Como verificar (GitHub é o ambiente de build)
 

@@ -84,11 +84,34 @@ section "TOOLCHAIN (build)"
 
 NODE=$(version_of node || true)
 NPM=$(version_of npm || true)
-CARGO=$(version_of cargo || true)
 
 if [ -n "$NODE" ]; then line node "$NODE"; else line node "ABSENT"; fi
 if [ -n "$NPM" ]; then line npm "$NPM"; else line npm "ABSENT"; fi
-if [ -n "$CARGO" ]; then line cargo "$CARGO"; else line cargo "ABSENT"; fi
+
+# rustup installs into `$HOME/.cargo`, which is off `PATH` unless the user edited
+# their shell profile — and the install above deliberately used
+# `--no-modify-path`. Looking in both places keeps the probe from reporting a
+# toolchain as missing when it is only unreachable.
+CARGO_BIN=""
+if command -v cargo >/dev/null 2>&1; then
+  CARGO_BIN=$(command -v cargo)
+  CARGO_ON_PATH=1
+elif [ -x "$HOME/.cargo/bin/cargo" ]; then
+  CARGO_BIN="$HOME/.cargo/bin/cargo"
+  CARGO_ON_PATH=0
+fi
+CARGO_ON_PATH=${CARGO_ON_PATH:-0}
+
+if [ -n "$CARGO_BIN" ]; then
+  CARGO=$(run_limited 10 "$CARGO_BIN" --version 2>/dev/null | head -1)
+  if [ "$CARGO_ON_PATH" -eq 1 ]; then
+    line cargo "$CARGO"
+  else
+    line cargo "$CARGO (not on PATH; use \$HOME/.cargo/bin)"
+  fi
+else
+  line cargo "ABSENT"
+fi
 
 # The floor is >=22; Node 20 in apt is below it, which is a trap worth naming.
 NODE_MAJOR=""
@@ -178,10 +201,26 @@ if have docker && run_limited 8 docker info >/dev/null 2>&1; then CAN_DOCKER=1; 
 CAN_AGENT=0
 if have ollama; then CAN_AGENT=1; fi
 
+# The two Tauri-free modules are testable without the GTK stack, which is the
+# only way any Rust here gets a local test loop. Both halves are required: cargo
+# to compile, and the harness manifest that pulls the modules in by path.
+CAN_RUST=0
+HARNESS=$(dirname "$0")/../src-tauri/harness/Cargo.toml
+if [ -n "$CARGO_BIN" ] && [ -f "$HARNESS" ]; then CAN_RUST=1; fi
+
 printf '  %s build the core / UI        (needs node >= 22 + npm)\n' "$(verdict $CAN_BUILD)"
 printf '  %s run the packaged app       (needs the WebKitGTK runtime)\n' "$(verdict $CAN_APP)"
 printf '  %s run the Docker sandbox     (needs a reachable daemon)\n' "$(verdict $CAN_DOCKER)"
 printf '  %s exercise the agent         (needs ollama or another provider)\n' "$(verdict $CAN_AGENT)"
+printf '  %s test the Tauri-free Rust   (needs cargo + src-tauri/harness)\n' "$(verdict $CAN_RUST)"
+
+if [ "$CAN_RUST" -eq 1 ] && [ "$CARGO_ON_PATH" -eq 0 ]; then
+  # Single quotes on purpose: this prints a snippet for the user to copy, so the
+  # `$HOME` and `$PATH` must reach the terminal unexpanded. Escaping them inside
+  # double quotes would print a literal backslash and hand over a broken command.
+  printf '\n  Rust is installed but off PATH — run:\n'
+  printf '    export PATH="$HOME/.cargo/bin:$PATH" && cd src-tauri/harness && cargo test\n'
+fi
 
 if [ "$CAN_BUILD" -eq 0 ]; then
   printf '\n  => This is NOT a build machine. GitHub Actions is the only compiler.\n'

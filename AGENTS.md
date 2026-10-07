@@ -167,19 +167,49 @@ não obteve, e nunca deduza a máquina: o probe responde.
 
 ## Como verificar o seu trabalho
 
-⚠️ **Verificado em 2026-10-07 na máquina B: ela NÃO tem `node`/`npm`, NÃO tem
-`cargo`/`rustc`, e o `docker` está instalado mas sem permissão** (socket
-`root:docker`, usuário fora do grupo). `npm install`/`lint`/`typecheck`/`test`/
-`build` **não** rodam lá, e o sandbox Docker **não** pode ser exercitado lá.
-**O GitHub Actions é o único compilador.** Se você não conseguiu executar uma
-verificação, diga isso — não a declare. (Nesta máquina de build, sim, tudo roda:
-confirme com `sh scripts/env-probe.sh`.)
+**Rode o probe primeiro** — ele responde quem é esta máquina:
 
-O que existe na máquina B para validar: **Python 3.13 + PyYAML** (parse de YAML e
-`bash -n` nos workflows, truque que já pegou bug real) e **`ollama`**, que permite
-exercitar o loop do agente contra um modelo real (`deepseek-r1:1.5b` local).
+```sh
+sh scripts/env-probe.sh
+```
 
-Quando o Node existir, a verificação é:
+Na **máquina B** (`juju-hppaviliong4notebookpc`, `machine-id` `3e798a6d`), medido
+em 2026-10-07:
+
+| **Dá para** | Porque |
+| --- | --- |
+| testar os módulos Rust Tauri-free | `cargo` 1.99 (rustup, user-space) + `src-tauri/harness` |
+| rodar o sandbox Docker | daemon nativo, usuário no grupo `docker` |
+| rodar o app empacotado | WebKitGTK presente |
+| exercitar o agente | `ollama` rodando (`deepseek-r1:1.5b`) |
+| validar YAML e `bash -n` | Python 3.13 + PyYAML |
+
+| **NÃO dá para** | Porque |
+| --- | --- |
+| `npm install`/`lint`/`typecheck`/`test`/`build` | sem `node`/`npm` — **o CI é o único compilador** |
+| compilar `src-tauri/src/main.rs` | exige `pkg-config` + libs GTK/WebKitGTK de sistema, e `sudo` pede senha |
+
+**Duas consequências:** (1) o CI é o único compilador do TypeScript e da camada
+Tauri — não declare um `npm test` que você não rodou; (2) `main.rs` precisa do
+workflow `tauri` para qualquer mudança, sem exceção.
+
+### O harness de Rust (`src-tauri/harness`) — como testar Rust sem GTK
+
+Os módulos `bridge.rs` e `mcp.rs` são Tauri-free de propósito, e o harness os
+inclui **por caminho** (`#[path]`, sem cópia que possa divergir) para rodar seus
+testes sem janela:
+
+```sh
+cd src-tauri/harness && cargo test
+```
+
+Provou-se útil de verdade: `17 passed` em 0.26 s, contra ~28 s do crate completo
+no CI. Use isto para qualquer mudança em `bridge.rs`/`mcp.rs` — **e note a
+contrapartida**: um arquivo de teste aqui só vale para estes dois módulos. Se o
+teste que você precisa exercita `main.rs` (um comando Tauri, por exemplo), ele
+**não** roda localmente e vai para o CI.
+
+Quando o Node existir, a verificação completa é:
 
 ```bash
 npm install
