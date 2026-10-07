@@ -143,6 +143,45 @@ describe('createAgentTools', () => {
     expect(await runWith(9)).toBe(9);
   });
 
+  it('names the tool arguments in the feedback the model gets after a failure', async () => {
+    // What a small model needs to fix its own mistake. The names come from the
+    // schema, so nothing has to be kept in sync by hand — this asserts the whole
+    // path: schema → AgentTool.parameters → the corrective message.
+    const failing: ToolRegistration = {
+      definition: {
+        name: 'write_file',
+        description: 'escreve um arquivo',
+        inputSchema: z.object({ path: z.string(), content: z.string() }),
+      },
+      handler: async () => ({ ...textResult('conteúdo'), isError: true as const }),
+    };
+
+    const bodies: unknown[] = [];
+    const scripted: LlmStreamFetcher = async (_url, body) => {
+      bodies.push(body);
+      return {
+        ok: true,
+        status: 200,
+        chunks: (async function* () {
+          yield `${JSON.stringify({
+            message: { role: 'assistant', content: '{"tool":"write_file","arguments":{"path":"a.py"}}' },
+          })}\n`;
+        })(),
+      };
+    };
+
+    const [agent] = createAgentTools({ tools: [failing], streamFetcher: scripted });
+    if (agent === undefined) {
+      throw new Error('createAgentTools returned no tool');
+    }
+    await agent.handler({ prompt: 'escreva', model: 'm', baseUrl: 'http://x', kind: 'ollama' });
+
+    const second = bodies[1] as { messages?: { content: string }[] } | undefined;
+    const feedback = (second?.messages ?? []).map((message) => message.content).join('\n');
+    expect(feedback).toContain('Resultado de write_file');
+    expect(feedback).toContain('espera exatamente estes argumentos: path, content');
+  });
+
   it('rejects a step budget outside the accepted range', async () => {
     // The schema is the user-facing gate: out of range must be `isError` before
     // the handler runs, instead of a silently clamped budget.
