@@ -26,6 +26,17 @@ import {
 export interface AgentTool {
   readonly name: string;
   readonly description: string;
+  /**
+   * The argument names the tool accepts, in the order its schema declares them.
+   *
+   * Used for one thing: when a call fails, the loop tells the model what the
+   * tool actually expects. A small local model that invents an argument name
+   * (`contents` for `content`) otherwise repeats the identical failing call until
+   * the step budget is gone, and the raw validation error — which names the
+   * *missing* field, not the wrong one — was not enough to break the loop in
+   * practice.
+   */
+  readonly parameters?: readonly string[];
   /** Execute a call; returns a string that is fed back to the model. */
   execute(arguments_: unknown): Promise<string>;
 }
@@ -198,6 +209,106 @@ async function executeSafely(tool: AgentTool, arguments_: unknown): Promise<stri
   }
 }
 
+/** Whether a tool result is a failure, as `agentTools` prefixes them. */
+function isFailure(result: string): boolean {
+  return result.trimStart().startsWith('ERRO:');
+}
+
+/**
+ * What the model is told after a failed call.
+ *
+ * The raw error is kept verbatim — it is what the tool actually said — and the
+ * tool's expected arguments are appended when they are known, because the model
+ * is usually one argument name away from succeeding.
+ */
+function failureFeedback(tool: AgentTool, result: string): string {
+  const expected =
+    tool.parameters === undefined || tool.parameters.length === 0
+      ? ''
+      : `\nA ferramenta "${tool.name}" espera exatamente estes argumentos: ${tool.parameters.join(', ')}.`;
+  return `Resultado de ${tool.name}:\n${result}${expected}`;
+}
+
+/** Whether the same call just failed the same way twice in a row. */
+function isRepeatedFailure(
+  previous: { signature: string; error: string } | null,
+  signature: string,
+  error: string,
+): boolean {
+  return previous !== null && previous.signature === signature && previous.error === error;
+}
+
+/**
+ * What the loop managed before it ran out of steps.
+ *
+ * A budget can run out after the work is done: a model that writes the files and
+ * then wanders (`list_models`, an irrelevant command) never emits a final answer,
+ * and reporting that as "não concluiu" is simply untrue — the files are on disk.
+ * Naming the tools that answered lets the user judge for themselves.
+ */
+function completedSummary(completed: readonly string[]): string {
+  return completed.length === 0
+    ? ''
+    : `\n\nFerramentas que responderam com sucesso: ${completed.join(', ')}.`;
+}
+
+/**
+ * What to say when the loop ran out of steps.
+ *
+ * Two different situations share the budget: the model kept working without
+ * giving a final answer (often after doing the job — report it so the user does
+ * not repeat it), or it stopped right after a call failed, in which case a bigger
+ * budget repeats the same error and saying so is the useful part.
+ */
+function exhaustedMessage(
+  lastCall: { tool: string; error: string | null } | null,
+  completed: readonly string[],
+): string {
+  const summary = completedSummary(completed);
+
+  if (lastCall !== null && lastCall.error !== null) {
+    // Both readings are possible here and the loop cannot tell them apart: the
+    // call may have failed because the model was mid-exploration (asking for a
+    // file it has not written yet) and just needed more steps, or because the call
+    // itself is wrong. Claiming either one would be a guess, so both are offered —
+    // the *repeat* guard below is where the strong claim is earned.
+    return (
+      `O agente parou no limite de passos logo depois de uma chamada que falhou ` +
+      `("${lastCall.tool}"):\n\n${lastCall.error}\n\n` +
+      'Se ele só precisava de mais passos, aumente "Máximo de passos"; se o mesmo erro ' +
+      'se repetir sempre, aumentar não resolve — corrija o argumento ou reformule a tarefa.' +
+      summary
+    );
+  }
+
+  return (
+    `O agente atingiu o limite de passos sem dar uma resposta final.${summary}` +
+    (completed.length === 0
+      ? ' Tente uma tarefa menor ou aumente o limite.'
+      : ' Se ele já fez o que você pediu, confira o resultado antes de repetir a tarefa;' +
+        ' para tarefas com vários passos, aumente "Máximo de passos" nas configurações.')
+  );
+}
+
+/**
+ * A stable fingerprint of one tool call, for spotting a repeated failure.
+ *
+ * Serialised rather than compared by reference so the check works across steps,
+ * where each step parses a fresh object. A tool that takes no arguments
+ * serialises to `{}` and still fingerprints consistently.
+ */
+function callSignature(toolName: string, arguments_: unknown): string {
+  let serialised: string;
+  try {
+    serialised = JSON.stringify(arguments_) ?? 'undefined';
+  } catch {
+    // A cyclic or otherwise unserialisable argument cannot be compared; giving it
+    // its own bucket is the safe answer (it simply never matches another call).
+    serialised = `unserialisable:${String(arguments_)}`;
+  }
+  return `${toolName}:${serialised}`;
+}
+
 /** Tools that may mutate the machine, paused for approval in assisted mode. */
 const DANGEROUS_TOOLS: ReadonlySet<string> = new Set(['write_file', 'run_terminal_command']);
 
@@ -230,6 +341,25 @@ export async function runAgentTurn(request: AgentTurnRequest): Promise<AgentTurn
   }
 
   const steps: AgentStep[] = [];
+
+  /**
+   * The last failed call, so an identical repeat can be spotted.
+   *
+   * `signature` is the tool name plus its arguments; `error` is the result text.
+   * Both must match, because the same call failing *differently* means something
+   * changed and another attempt is worth it.
+   */
+  let previousFailure: { signature: string; error: string } | null = null;
+  /**
+   * The most recent tool call, success or failure.
+   *
+   * Which one it was decides what advice is honest at the end: blaming a failure
+   * that the model already recovered from ("corrija o argumento") points at the
+   * wrong thing, so the failure is only reported when it really was the last word.
+   */
+  let lastCall: { tool: string; error: string | null } | null = null;
+  /** Tools that answered successfully, in order, for the end-of-budget report. */
+  const completed: string[] = [];
 
   let messages: LlmMessage[];
   if (request.history !== undefined) {
@@ -334,14 +464,45 @@ export async function runAgentTurn(request: AgentTurnRequest): Promise<AgentTurn
     }
 
     const result = await executeSafely(tool, arguments_);
-    messages.push({ role: 'user', content: `Resultado de ${toolName}:\n${result}` });
+
+    if (isFailure(result)) {
+      const signature = callSignature(toolName, arguments_);
+      // One retry is allowed on purpose: a transient failure (a timeout, a
+      // container hiccup) can succeed the second time. The same call failing the
+      // same way twice is not transient — it is the model repeating itself, and
+      // spending the rest of the budget on it only delays the bad news.
+      if (isRepeatedFailure(previousFailure, signature, result)) {
+        steps.push({ action: 'tool', text: toolName });
+        return {
+          status: 'done',
+          answer:
+            `A chamada a "${toolName}" falhou duas vezes seguidas com os mesmos argumentos e o mesmo erro, ` +
+            `então parei em vez de gastar o resto do orçamento repetindo-a. Erro:\n\n${result}` +
+            (tool.parameters === undefined || tool.parameters.length === 0
+              ? ''
+              : `\n\nA ferramenta espera exatamente estes argumentos: ${tool.parameters.join(', ')}.`) +
+            completedSummary(completed),
+          steps,
+        };
+      }
+      previousFailure = { signature, error: result };
+      lastCall = { tool: toolName, error: result };
+    } else {
+      previousFailure = null;
+      lastCall = { tool: toolName, error: null };
+      completed.push(toolName);
+    }
+
+    messages.push({
+      role: 'user',
+      content: isFailure(result) ? failureFeedback(tool, result) : `Resultado de ${toolName}:\n${result}`,
+    });
     steps.push({ action: 'tool', text: toolName });
   }
 
   return {
     status: 'done',
-    answer:
-      'O agente atingiu o limite de passos sem concluir. Tente uma tarefa menor ou aumente o limite.',
+    answer: exhaustedMessage(lastCall, completed),
     steps,
   };
 }
