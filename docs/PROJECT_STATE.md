@@ -523,6 +523,52 @@ node dist/core.mjs      # core como MCP server stdio
     stubado: padrão `600` com "10.0 min", `0` → campo mostra `0` e o rótulo vira
     **"sem limite de tempo"**, `-5` → `0`, `5` → `10`, `min="0"` no input, e o
     pedido sai com **`timeoutSeconds: 0`** — o que o shell traduz em `Some(0)`.
+21. ✅ **Funções trazidas do `Duck-Hermes-Studio`.** O dono pediu para mesclar o que
+    aquele projeto tem e este não tem. A arquitetura é outra (Express + vanilla JS
+    contra core MCP + React), então o que veio foi o **comportamento**, reescrito em
+    TypeScript no formato deste repositório:
+    - **`edit_file`** — troca cirúrgica de trechos em vez de reescrever o arquivo.
+      A regra que importa: um `find` que casa **mais de uma vez é erro**, não "troca a
+      primeira" — escolher uma ocorrência em silêncio é como uma edição cai na função
+      errada e só aparece muito depois. `all: true` é a forma explícita de trocar
+      todas. Tudo é aplicado em memória e gravado **uma vez**, então edição recusada
+      deixa o arquivo intacto.
+    - **`web_fetch` + `web_search`** (`common/web/`) — leitura de páginas públicas
+      (HTML → texto legível, JSON/XML como estão) e busca (DuckDuckGo grátis, ou
+      SearXNG via `NEXUS_SEARCH_URL`). O que veio de lá e é o ponto do módulo: a
+      **política de SSRF** — nome bloqueado, faixa privada IPv4/IPv6 (incl. `::ffff:`),
+      **DNS resolvido** (nome público que aponta para dentro é recusado) e **cada
+      redirect revalidado**. Corpo limitado a 2 MB, texto a 20 mil caracteres,
+      15 s por página. **Limite conhecido e documentado no módulo:** não protege
+      contra DNS rebinding de verdade (fechar exigiria fixar a conexão no IP
+      validado, o que o `fetch` da plataforma não expõe).
+    - **`remember_project_fact` + `recall_project_memory`** — memória do projeto na
+      seção `## Memória do projeto` do `AGENTS.md` do workspace. **Anexa** um bullet;
+      nunca reescreve o documento, que é prosa mantida à mão. Duplicata exata é
+      ignorada e o total tem teto (200 fatos).
+    - **Pré-visualização + console** (`PreviewPanel`) — nova aba no painel inferior
+      que renderiza **HTML, Markdown, JSON e texto** e captura `console.*`, erros e
+      promessas rejeitadas da página. Markdown e escape são escritos à mão (o bundle
+      é dependency-free de propósito). `Ctrl+Enter` roda/recarrega.
+      **Duas decisões de segurança:** o iframe é `sandbox="allow-scripts"` **sem**
+      `allow-same-origin` — a página ganha origem única e não alcança o DOM do app
+      nem a ponte Tauri; e links do Markdown só viram âncora para `http(s)`/`mailto`.
+    - **Web desligada por padrão.** `web_fetch`/`web_search` são as únicas tools que
+      **mandam dados para fora da máquina**, então seguem a mesma regra do
+      `NEXUS_UNSANDBOXED`: ligadas só por `NEXUS_WEB_ACCESS=1`, nunca pelo webview.
+      Desligadas, as tools **respondem** com o motivo e o nome exato da variável.
+    **Surface: 11 → 16 tools** (as três listas que a asseguram foram atualizadas:
+    `core.test.ts`, `scripts/smoke-mcp.ts` e o e2e em `src-tauri/src/mcp.rs`).
+    **Verificado:** **319 testes** (eram 235) — política de SSRF com matriz de IPs,
+    redirect para `localhost` recusado sem segunda requisição, HTML→texto, busca
+    DuckDuckGo/SearXNG, `edit_file` (ambíguo, ausente, `all`, tudo-ou-nada),
+    memória (duplicata, documento preservado, seção criada) e o renderizador
+    (escape, `javascript:` recusado, code fence, listas, bridge do console). O
+    smoke passou a exercitar `edit_file`, `recall_project_memory` e a recusa do
+    `web_fetch` desligado. **A UI não foi aberta num browser nesta sessão** (a
+    ferramenta de browser não estava disponível): a verificação dela é o build do
+    Vite, o `typecheck` e os 22 testes do renderizador — o componente em si fica a
+    cargo de quem rodar o app.
 
 ---
 

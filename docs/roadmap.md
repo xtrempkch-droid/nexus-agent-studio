@@ -54,6 +54,15 @@
       debounced caret reporting, `languageId` derived in the core) + UI wiring
 - [x] Close editor tabs; give the agent a configurable budget (time, with `0` meaning
       "no deadline", and steps) and report an unfinished turn honestly
+- [x] Merge the functions `Duck-Hermes-Studio` had and this project did not:
+      `edit_file` (surgical, all-or-nothing), `web_fetch` / `web_search` behind an
+      SSRF policy and `NEXUS_WEB_ACCESS`, project memory in `AGENTS.md`
+      (`remember_project_fact` / `recall_project_memory`), preview panel with
+      console capture (HTML / Markdown / JSON / text)
+- [ ] Preview for binary files (images, PDF) — the core reads text only, so this
+      needs a base64 read path first
+- [ ] Preview assets: serve the workspace so a page's own `style.css` and images
+      load (today only self-contained HTML previews correctly)
 - [x] Request queue in the sidecar instead of the blocking session mutex —
       `src-tauri/src/worker.rs` owns the session on one thread, handles requests in
       submission order, and holds nothing while the core works. A slow turn no

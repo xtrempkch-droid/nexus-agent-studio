@@ -94,7 +94,7 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   renomear uma tool, atualize os três ou o CI fica vermelho: `common/core.test.ts`
   (lista ordenada), `scripts/smoke-mcp.ts` (`EXPECTED_TOOLS`, conta exata) e
   `src-tauri/src/mcp.rs` (teste e2e `handshakes_with_the_real_core`). A surface
-  atual são **11 tools**.
+  atual são **16 tools**.
 - **No shell (`src-tauri`), comando síncrono roda na main thread.** Qualquer comando
   que bloqueie — chamada ao core (`call_core_tool`), handshake, probe, shutdown de
   sessão — tem de ser `async fn` e rodar o trabalho bloqueante com
@@ -253,7 +253,24 @@ passaram. Se não puder executá-los, diga isso explicitamente.
 
 - Commits em [Conventional Commits](https://www.conventionalcommits.org/):
   `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`.
-- Mudança pública no core exige teste em `common/**/*.test.ts` (Vitest).
+- Mudança pública no core exige teste em `common/**/*.test.ts` (Vitest). Lógica
+  **pura** da UI (o renderizador da pré-visualização) é testada em
+  `variants/desktop/src/lib/**/*.test.ts`; componentes continuam verificados no
+  browser, porque o Vitest roda em `environment: node`.
+
+## Capacidades que saem da máquina (leia antes de mexer)
+
+- **Web é opt-in.** `web_fetch`/`web_search` são as únicas tools que mandam dados
+  para fora; ficam desligadas até `NEXUS_WEB_ACCESS=1`, e o webview nunca decide
+  isso (mesma regra do `NEXUS_UNSANDBOXED`). A política de SSRF vive em
+  `common/web/fetchPolicy.ts`: nome bloqueado, faixa privada IPv4/IPv6, **DNS
+  resolvido** e **cada redirect revalidado**. Ela não fecha DNS rebinding — está
+  escrito no módulo, não presuma o contrário.
+- **A pré-visualização roda código do usuário.** O iframe é
+  `sandbox="allow-scripts"` **sem** `allow-same-origin`, e é isso que impede a
+  página de alcançar o DOM do app, o `localStorage` e a ponte Tauri. Não adicione
+  `allow-same-origin` "para o CSS carregar": o preço é a origem compartilhada.
+  Escape de HTML no renderizador é higiene, **não** é a fronteira.
 - Não comite `node_modules/`, `dist/`, `*.log` (ver `.gitignore`).
 - `layout/` está fora de lint e build: é **referência de design**, não código de produção.
 - Ao terminar, atualize `docs/PROJECT_STATE.md` (§2 status, §5 próximos passos,
