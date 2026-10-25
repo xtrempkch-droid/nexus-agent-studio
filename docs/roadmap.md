@@ -63,7 +63,36 @@
       needs a base64 read path first
 - [ ] Preview assets: serve the workspace so a page's own `style.css` and images
       load (today only self-contained HTML previews correctly)
-- [x] Request queue in the sidecar instead of the blocking session mutex —
+- [x] Agent commands and per-file instructions — `.github/prompts/*.prompt.md`
+      (14 slash commands) + `.github/instructions/` (`frontend-design`,
+      `web-performance`), indexed in `docs/AGENT_SKILLS.md`. Audited first: the
+      verification gate, code review, CI/CD and the environment probe already
+      existed without a command name, so they were pointed at rather than
+      duplicated.
+- [ ] Findings that audit surfaced, each its own task:
+      - [ ] Bundle Inter/Fira Code instead of loading them from Google Fonts —
+            an offline app currently makes a doomed remote request (`index.html`)
+      - [ ] Make the bottom tab bar a real `role="tablist"` with arrow-key
+            navigation (today: plain buttons, `aria-selected` absent)
+      - [ ] Unify the icon buttons' focus ring (`focus-visible:ring-2`) — several
+            use `focus:outline-none` with a border change only
+      - [ ] Cap the chat history (the preview console is capped at 200 lines; the
+            conversation is not)
+      - [ ] Convert the ~300 raw `slate-*`/`indigo-*` utilities to the `--color-ide-*`
+            tokens (9 uses today) — decide the palette first, since most tones differ
+      - [ ] **Symlink escape in `common/security/pathGuard.ts`.** The guard resolves
+            *lexically* (`normalize` + `relative`, no `realpath`), so `link/passwd`
+            with `link -> /etc` is inside the root as a string and followed on read.
+            Found while writing `/threat-model`; not fixed there on purpose (it is a
+            behaviour change in security-critical code and needs its own test with a
+            real symlink, which only Windows-vs-POSIX tests will tell apart).
+            **Reproduced**, not theorised: with `ws/link.txt -> /tmp/secret.txt`,
+            `resolveWorkspacePath(ws, 'link.txt')` returns the path and
+            `readFileSync` returns the outside content. Fix direction:
+            `realpath` the target when it exists (and the parent when creating),
+            then re-check containment — plus a POSIX-only test that skips on
+            Windows, where creating symlinks needs privileges.
+- [ ] Request queue in the sidecar instead of the blocking session mutex —
       `src-tauri/src/worker.rs` owns the session on one thread, handles requests in
       submission order, and holds nothing while the core works. A slow turn no
       longer blocks every other tool; a request that spends its budget queued is

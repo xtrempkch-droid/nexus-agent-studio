@@ -44,7 +44,7 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 
 | Fase | Escopo | Código | Verificado em runtime |
 | --- | --- | --- | --- |
-| 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` |
+| 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` · **comandos `/nome` e instruções por arquivo** em `.github/` (§5 item 22) |
 | 2 | Core TypeScript (`common/`) | ✅ completo | 🟡 parcial: o servidor MCP é exercitado ponta a ponta; temas e plugins só em teste unitário |
 | 3 | Sandbox + shell | ✅ completo | ✅ **verificado ao vivo no notebook** (§3 item 30): roda como o usuário, `CapEff` zerado, rede bloqueada, `--rm` limpo. No CI **não** há Docker, mas existe o `LocalRunner` opt-in (`NEXUS_UNSANDBOXED=1`). O shell passou a ter **fila de requisições** (§3 item 32). |
 | 4 | Arquitetura de plugins | ✅ completo | 🟡 parcial: registro/unload cobertos por teste, mas nenhum plugin real foi carregado |
@@ -569,6 +569,45 @@ node dist/core.mjs      # core como MCP server stdio
     ferramenta de browser não estava disponível): a verificação dela é o build do
     Vite, o `typecheck` e os 22 testes do renderizador — o componente em si fica a
     cargo de quem rodar o app.
+22. ✅ **Comandos (`/nome`) e instruções por arquivo.** O dono passou uma lista de 16
+    skills/comandos de agente e pediu para listar as ausentes e adicionar. A auditoria
+    foi feita antes de escrever, porque **metade da lista já existia sem nome de
+    comando**: portão de verificação (`AGENTS.md` + workflow `build`), revisão
+    (checklist do PR template), CI/CD (os 4 workflows) e `scripts/env-probe.sh`. O que
+    faltava de fato virou arquivo; o que existia foi **apontado**, não duplicado.
+    - **14 prompts** em `.github/prompts/` (`/review`, `/verify`, `/ci`, `/refactor`,
+      `/doc-gen`, `/grill-me`, `/grill-with-docs`, `/threat-model`, `/caveman`,
+      `/explain-brief`, `/explain-error`, `/db-schema`, `/script-gen`, `/tailwind`) e
+      **2 instruções** com `applyTo` (`frontend-design`, `web-performance`). Índice em
+      `docs/AGENT_SKILLS.md`.
+    - **A regra que os torna úteis é a que os torna frágeis:** cada um cita número e
+      caminho reais (16 tools, 1.844 linhas em `App.tsx`, ~300 classes cruas contra ~9
+      tokens, `set -euo pipefail` só em bash). Prompt genérico o modelo já sabe de cor;
+      número errado é a mesma classe de erro que doc errado — alguém confia e não
+      confere.
+    - **Três omissões deliberadas, escritas no índice.** (a) `/db-schema` **não tem
+      banco para revisar**: o projeto não tem SQL, migração nem ORM; o prompt diz isso
+      na primeira linha e redireciona para os contratos que existem (`inputSchema` das
+      tools, settings, memória, envelope TS↔Rust). (b) `/ci` documenta o caminho que
+      funciona aqui — `gh` **não está instalado** e a tool MCP `create_pull_request`
+      falha com *"Callback URL is required"* — em vez de fingir `gh pr create`. (c) as
+      "Vercel Web Design Guidelines" foram **adaptadas**: não há Next.js nem CDN neste
+      runtime, então `next/image`/ISR não descrevem nada aqui.
+    - **`/doc-gen` contra a própria regra de estilo:** o repositório comenta só o que
+      precisa de esclarecimento, então o prompt documenta **contrato** (o que é
+      garantido, o que é recusado, efeito colateral) e proíbe narração de linha.
+    - **Achados colaterais registrados nos próprios arquivos**, todos verificáveis: a UI
+      carrega Inter/Fira Code de `fonts.googleapis.com` (`index.html`) num app que
+      promete funcionar offline; o histórico do chat não tem teto (só o console da
+      pré-visualização, 200 linhas); a barra de abas ainda não é `role="tablist"`; e os
+      tokens `--color-ide-*` existem e são usados 9 vezes contra ~300 classes
+      `slate-*`/`indigo-*` cruas. Nenhum dos quatro foi "consertado" aqui, porque cada
+      um é uma tarefa própria.
+    **Verificado:** frontmatter YAML dos 16 arquivos lido por parser (`description`
+    presente em todos, sem erro de YAML) — é o modo de falha silencioso desses
+    arquivos; `lint`/`typecheck`/`test`/`build` continuam verdes (nada de código mudou).
+    **Não verificado:** que o VS Code descobre e renderiza os comandos nesta
+    instalação — isso só se confirma digitando `/` no chat.
 
 ---
 

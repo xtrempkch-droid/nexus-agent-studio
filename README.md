@@ -11,7 +11,8 @@ in `variants/`.
 o arquivo de rastro com status, bloqueios e próximos passos. Agentes de IA devem ler
 também [`AGENTS.md`](AGENTS.md). Arquitetura em
 [`docs/architecture.md`](docs/architecture.md); roadmap em
-[`docs/roadmap.md`](docs/roadmap.md).
+[`docs/roadmap.md`](docs/roadmap.md); os comandos de agente (`/review`, `/verify`,
+`/threat-model`, …) em [`docs/AGENT_SKILLS.md`](docs/AGENT_SKILLS.md).
 
 ---
 

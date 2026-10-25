@@ -249,6 +249,25 @@ O GitHub Actions é a fonte de verdade: o workflow `build` roda
 **Não declare uma tarefa concluída** se `lint`/`typecheck`/`test`/`build` não
 passaram. Se não puder executá-los, diga isso explicitamente.
 
+## Comandos (`/nome`) e instruções por arquivo
+
+A tarefa tem um comando próprio? Use-o em vez de improvisar — cada um cita os
+arquivos, os comandos e as falhas reais deste projeto. O índice, com o que já
+existia antes e o que ficou de fora de propósito, é
+[`docs/AGENT_SKILLS.md`](docs/AGENT_SKILLS.md).
+
+- `.github/prompts/*.prompt.md` → `/review`, `/verify`, `/ci`, `/refactor`,
+  `/doc-gen`, `/grill-me`, `/grill-with-docs`, `/threat-model`, `/caveman`,
+  `/explain-brief`, `/explain-error`, `/db-schema`, `/script-gen`, `/tailwind`.
+- `.github/instructions/*.instructions.md` → carregam por `applyTo`:
+  `frontend-design` (toda a UI) e `web-performance` (`variants/desktop/**`).
+
+**Três regras para não apodrecer:** (a) prompt cita número real (16 tools, 1.844
+linhas em `App.tsx`) — se o número mudar, o prompt muda na mesma tarefa; (b) regra
+que vale **sempre** pertence a este arquivo ou a um `*.instructions.md`, não a um
+prompt; (c) não crie prompt para uma preocupação que o projeto não tem — `/db-schema`
+existe e diz, na primeira linha, que **não há banco de dados aqui**.
+
 ## Convenções de mudança
 
 - Commits em [Conventional Commits](https://www.conventionalcommits.org/):
