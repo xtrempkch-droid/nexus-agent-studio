@@ -20,14 +20,19 @@ describe('createCore', () => {
     expect(core.server.getToolNames().sort()).toEqual([
       'ask_agent',
       'configure_language_server',
+      'edit_file',
       'get_diagnostics',
       'get_editor_context',
       'list_directory',
       'list_language_servers',
       'list_models',
       'read_file',
+      'recall_project_memory',
+      'remember_project_fact',
       'run_terminal_command',
       'set_editor_context',
+      'web_fetch',
+      'web_search',
       'write_file',
     ]);
   });
