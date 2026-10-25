@@ -44,7 +44,7 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 
 | Fase | Escopo | Código | Verificado em runtime |
 | --- | --- | --- | --- |
-| 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` · **comandos `/nome` e instruções por arquivo** em `.github/` (§5 item 22) |
+| 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` · **comandos `/nome`, 11 skills e instruções por arquivo** em `.github/` (§5 itens 22–23) |
 | 2 | Core TypeScript (`common/`) | ✅ completo | 🟡 parcial: o servidor MCP é exercitado ponta a ponta; temas e plugins só em teste unitário |
 | 3 | Sandbox + shell | ✅ completo | ✅ **verificado ao vivo no notebook** (§3 item 30): roda como o usuário, `CapEff` zerado, rede bloqueada, `--rm` limpo. No CI **não** há Docker, mas existe o `LocalRunner` opt-in (`NEXUS_UNSANDBOXED=1`). O shell passou a ter **fila de requisições** (§3 item 32). |
 | 4 | Arquitetura de plugins | ✅ completo | 🟡 parcial: registro/unload cobertos por teste, mas nenhum plugin real foi carregado |
@@ -608,6 +608,51 @@ node dist/core.mjs      # core como MCP server stdio
     arquivos; `lint`/`typecheck`/`test`/`build` continuam verdes (nada de código mudou).
     **Não verificado:** que o VS Code descobre e renderiza os comandos nesta
     instalação — isso só se confirma digitando `/` no chat.
+23. ✅ **Segunda leva de skills: 11 skills com asset + `/run` + React.** O dono mandou
+    outra lista (OpenCode/Cursor/Copilot) pedindo o que ainda não existisse. A auditoria
+    outra vez veio antes: `Frontend Design` e `Web Design Guidelines` **já existiam**
+    (`frontend-design` + `web-performance`), assim como `/verify`, `/grill-me`,
+    `/grill-with-docs` e `/caveman`. Foi criado só o que faltava — e o que faltava de
+    verdade era **processo**, não estilo:
+    - **11 skills** em `.github/skills/` (formato `SKILL.md`, `name` = pasta):
+      `skill-optimizer`, `agent-smith`, `deep-research`, `cortex-linter`, `superpm`,
+      `playwright-browser`, `tdd-loop`, `systematic-debugging`, `ponytail`,
+      `feature-dev-pipeline`, `to-spec`. Skills carregam por tarefa; as regras que valem
+      sempre continuam no `AGENTS.md` — evita o modo de falha de duplicar invariante.
+    - **`react-best-practices.instructions.md`** (`applyTo: **/*.tsx`) — era o único
+      pedaço real que faltava do "Vercel React Best Practices": estado derivado, `key`
+      estável, efeitos com limpeza, `stopPropagation` no Enter, fronteira do IPC.
+      RSC/`next/image`/ISR **não** entraram: não existem num WebView com Vite.
+    - **`/run`** (`run.prompt.md`) — `/verify` prova que os comandos passam; `/run` prova
+      que o app faz algo. A distinção importa porque este projeto já teve lint,
+      typecheck e ~300 testes verdes com o sandbox saindo `127` em toda chamada.
+    - **Dois scripts, ambos executados de verdade.** `skill-optimizer/scripts/
+      repeated-commands.sh` (POSIX sh, filtra linha com `KEY|TOKEN|PASSWORD|SECRET`
+      antes de imprimir) rodou sobre os 581 comandos do `~/.bash_history` desta
+      máquina: `ollama run` 42×, `ollama list` 39×, `sudo dmidecode` 38×. E
+      `playwright-browser/scripts/ui-shot.sh` — que resolve o "a UI nunca foi aberta num
+      browser" **sem instalar Playwright** — fez screenshot (118 KB, 1600×1000, 9.803
+      cores distintas) e dump de DOM (**58 KB**) do dev server: as quatro abas do painel
+      inferior (`Agente`, `Terminal`, `Alterações`, `Pré-visualização`) estão no DOM
+      renderizado. **É a primeira vez nesta série de sessões que a UI é de fato
+      renderizada e inspecionada**, em vez de "verificada pelo build".
+    - **Bugs no meu próprio script, achados ao rodá-lo:** `curl -w` com falha de conexão
+      devolvia `000` **e** o `|| echo 000` concatenava → `"000000"`, que não casa com
+      nada e deixava o script seguir para o navegador; e o `--screenshot` do snap
+      Chromium grava no `/tmp` **privado do snap** (`bytes written` mas arquivo
+      inexistente). Ambos corrigidos — o segundo virou aviso explícito no script.
+    - **Recusados, com motivo escrito** (em `docs/AGENT_SKILLS.md`): `/rc` é recurso do
+      produto hospedado (e expor sessão por URL contradiz o modelo local-first);
+      `/voice` é recurso de editor/SO, não conteúdo versionado; Fabric/Azure não tem
+      alvo neste projeto; e o "permissões em SQLite" do Agent Smith virou **git
+      worktree**, porque aqui não há SQLite e as fronteiras reais são Docker +
+      `pathGuard` + a fila do `worker.rs`.
+    **Verificado:** frontmatter dos **30** arquivos (11 skills + 15 prompts + 3
+    instruções) lido por parser, com `name` == pasta e `description` ≤ 1024; zero link
+    relativo quebrado no repositório; os dois scripts com `sh -n` e execução real
+    (inclusive os caminhos de erro: exit 2 sem URL, exit 3 sem servidor).
+    **Não verificado:** que o VS Code lista os 11 skills como `/comando` nesta
+    instalação — o mesmo limite do item 22, que só se confirma digitando `/`.
 
 ---
 

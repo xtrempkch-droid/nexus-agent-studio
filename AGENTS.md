@@ -256,11 +256,16 @@ arquivos, os comandos e as falhas reais deste projeto. O índice, com o que já
 existia antes e o que ficou de fora de propósito, é
 [`docs/AGENT_SKILLS.md`](docs/AGENT_SKILLS.md).
 
-- `.github/prompts/*.prompt.md` → `/review`, `/verify`, `/ci`, `/refactor`,
+- `.github/prompts/*.prompt.md` → `/review`, `/verify`, `/run`, `/ci`, `/refactor`,
   `/doc-gen`, `/grill-me`, `/grill-with-docs`, `/threat-model`, `/caveman`,
   `/explain-brief`, `/explain-error`, `/db-schema`, `/script-gen`, `/tailwind`.
+- `.github/skills/<nome>/SKILL.md` → `/skill-optimizer`, `/agent-smith`,
+  `/deep-research`, `/cortex-linter`, `/superpm`, `/playwright-browser`, `/tdd-loop`,
+  `/systematic-debugging`, `/ponytail`, `/feature-dev-pipeline`, `/to-spec`. Skills
+  levam assets (`scripts/`) e carregam por tarefa, não por arquivo.
 - `.github/instructions/*.instructions.md` → carregam por `applyTo`:
-  `frontend-design` (toda a UI) e `web-performance` (`variants/desktop/**`).
+  `frontend-design` (toda a UI), `react-best-practices` (`*.tsx`) e
+  `web-performance` (`variants/desktop/**`).
 
 **Três regras para não apodrecer:** (a) prompt cita número real (16 tools, 1.844
 linhas em `App.tsx`) — se o número mudar, o prompt muda na mesma tarefa; (b) regra

@@ -64,11 +64,19 @@
 - [ ] Preview assets: serve the workspace so a page's own `style.css` and images
       load (today only self-contained HTML previews correctly)
 - [x] Agent commands and per-file instructions — `.github/prompts/*.prompt.md`
-      (14 slash commands) + `.github/instructions/` (`frontend-design`,
-      `web-performance`), indexed in `docs/AGENT_SKILLS.md`. Audited first: the
-      verification gate, code review, CI/CD and the environment probe already
-      existed without a command name, so they were pointed at rather than
-      duplicated.
+      (15 slash commands) + `.github/instructions/` (`frontend-design`,
+      `react-best-practices`, `web-performance`), indexed in `docs/AGENT_SKILLS.md`.
+      Audited first: the verification gate, code review, CI/CD and the environment
+      probe already existed without a command name, so they were pointed at rather
+      than duplicated.
+- [x] Agent skills with assets — `.github/skills/<nome>/SKILL.md`:
+      `skill-optimizer` (writes the automation that removes a repeated task, with a
+      history-counting script), `agent-smith` (partition + git worktrees),
+      `deep-research`, `cortex-linter`, `superpm` (task lifecycle in the repo),
+      `playwright-browser` (renders the UI through a system Chromium — no Playwright
+      dependency), `tdd-loop`, `systematic-debugging`, `ponytail` (anti-over-engineering),
+      `feature-dev-pipeline` (7 gated phases) and `to-spec`. Plus `/run` as a prompt.
+      The UI was rendered and its DOM inspected for the first time in this series.
 - [ ] Findings that audit surfaced, each its own task:
       - [ ] Bundle Inter/Fira Code instead of loading them from Google Fonts —
             an offline app currently makes a doomed remote request (`index.html`)
