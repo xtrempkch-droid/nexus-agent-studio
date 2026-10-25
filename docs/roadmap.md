@@ -54,7 +54,53 @@
       debounced caret reporting, `languageId` derived in the core) + UI wiring
 - [x] Close editor tabs; give the agent a configurable budget (time, with `0` meaning
       "no deadline", and steps) and report an unfinished turn honestly
-- [x] Request queue in the sidecar instead of the blocking session mutex —
+- [x] Merge the functions `Duck-Hermes-Studio` had and this project did not:
+      `edit_file` (surgical, all-or-nothing), `web_fetch` / `web_search` behind an
+      SSRF policy and `NEXUS_WEB_ACCESS`, project memory in `AGENTS.md`
+      (`remember_project_fact` / `recall_project_memory`), preview panel with
+      console capture (HTML / Markdown / JSON / text)
+- [ ] Preview for binary files (images, PDF) — the core reads text only, so this
+      needs a base64 read path first
+- [ ] Preview assets: serve the workspace so a page's own `style.css` and images
+      load (today only self-contained HTML previews correctly)
+- [x] Agent commands and per-file instructions — `.github/prompts/*.prompt.md`
+      (15 slash commands) + `.github/instructions/` (`frontend-design`,
+      `react-best-practices`, `web-performance`), indexed in `docs/AGENT_SKILLS.md`.
+      Audited first: the verification gate, code review, CI/CD and the environment
+      probe already existed without a command name, so they were pointed at rather
+      than duplicated.
+- [x] Agent skills with assets — `.github/skills/<nome>/SKILL.md`:
+      `skill-optimizer` (writes the automation that removes a repeated task, with a
+      history-counting script), `agent-smith` (partition + git worktrees),
+      `deep-research`, `cortex-linter`, `superpm` (task lifecycle in the repo),
+      `playwright-browser` (renders the UI through a system Chromium — no Playwright
+      dependency), `tdd-loop`, `systematic-debugging`, `ponytail` (anti-over-engineering),
+      `feature-dev-pipeline` (7 gated phases) and `to-spec`. Plus `/run` as a prompt.
+      The UI was rendered and its DOM inspected for the first time in this series.
+- [ ] Findings that audit surfaced, each its own task:
+      - [ ] Bundle Inter/Fira Code instead of loading them from Google Fonts —
+            an offline app currently makes a doomed remote request (`index.html`)
+      - [ ] Make the bottom tab bar a real `role="tablist"` with arrow-key
+            navigation (today: plain buttons, `aria-selected` absent)
+      - [ ] Unify the icon buttons' focus ring (`focus-visible:ring-2`) — several
+            use `focus:outline-none` with a border change only
+      - [ ] Cap the chat history (the preview console is capped at 200 lines; the
+            conversation is not)
+      - [ ] Convert the ~300 raw `slate-*`/`indigo-*` utilities to the `--color-ide-*`
+            tokens (9 uses today) — decide the palette first, since most tones differ
+      - [ ] **Symlink escape in `common/security/pathGuard.ts`.** The guard resolves
+            *lexically* (`normalize` + `relative`, no `realpath`), so `link/passwd`
+            with `link -> /etc` is inside the root as a string and followed on read.
+            Found while writing `/threat-model`; not fixed there on purpose (it is a
+            behaviour change in security-critical code and needs its own test with a
+            real symlink, which only Windows-vs-POSIX tests will tell apart).
+            **Reproduced**, not theorised: with `ws/link.txt -> /tmp/secret.txt`,
+            `resolveWorkspacePath(ws, 'link.txt')` returns the path and
+            `readFileSync` returns the outside content. Fix direction:
+            `realpath` the target when it exists (and the parent when creating),
+            then re-check containment — plus a POSIX-only test that skips on
+            Windows, where creating symlinks needs privileges.
+- [ ] Request queue in the sidecar instead of the blocking session mutex —
       `src-tauri/src/worker.rs` owns the session on one thread, handles requests in
       submission order, and holds nothing while the core works. A slow turn no
       longer blocks every other tool; a request that spends its budget queued is

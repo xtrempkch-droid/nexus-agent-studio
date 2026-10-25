@@ -44,7 +44,7 @@ sandbox Docker → parser de erros → `ExecutionLogger` + inline hints → UI.
 
 | Fase | Escopo | Código | Verificado em runtime |
 | --- | --- | --- | --- |
-| 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` |
+| 1 | Infra, CI/CD, governança | ✅ completo | ✅ o CI executa `npm ci → lint → typecheck → test → build → smoke` · **comandos `/nome`, 11 skills e instruções por arquivo** em `.github/` (§5 itens 22–23) |
 | 2 | Core TypeScript (`common/`) | ✅ completo | 🟡 parcial: o servidor MCP é exercitado ponta a ponta; temas e plugins só em teste unitário |
 | 3 | Sandbox + shell | ✅ completo | ✅ **verificado ao vivo no notebook** (§3 item 30): roda como o usuário, `CapEff` zerado, rede bloqueada, `--rm` limpo. No CI **não** há Docker, mas existe o `LocalRunner` opt-in (`NEXUS_UNSANDBOXED=1`). O shell passou a ter **fila de requisições** (§3 item 32). |
 | 4 | Arquitetura de plugins | ✅ completo | 🟡 parcial: registro/unload cobertos por teste, mas nenhum plugin real foi carregado |
@@ -523,6 +523,136 @@ node dist/core.mjs      # core como MCP server stdio
     stubado: padrão `600` com "10.0 min", `0` → campo mostra `0` e o rótulo vira
     **"sem limite de tempo"**, `-5` → `0`, `5` → `10`, `min="0"` no input, e o
     pedido sai com **`timeoutSeconds: 0`** — o que o shell traduz em `Some(0)`.
+21. ✅ **Funções trazidas do `Duck-Hermes-Studio`.** O dono pediu para mesclar o que
+    aquele projeto tem e este não tem. A arquitetura é outra (Express + vanilla JS
+    contra core MCP + React), então o que veio foi o **comportamento**, reescrito em
+    TypeScript no formato deste repositório:
+    - **`edit_file`** — troca cirúrgica de trechos em vez de reescrever o arquivo.
+      A regra que importa: um `find` que casa **mais de uma vez é erro**, não "troca a
+      primeira" — escolher uma ocorrência em silêncio é como uma edição cai na função
+      errada e só aparece muito depois. `all: true` é a forma explícita de trocar
+      todas. Tudo é aplicado em memória e gravado **uma vez**, então edição recusada
+      deixa o arquivo intacto.
+    - **`web_fetch` + `web_search`** (`common/web/`) — leitura de páginas públicas
+      (HTML → texto legível, JSON/XML como estão) e busca (DuckDuckGo grátis, ou
+      SearXNG via `NEXUS_SEARCH_URL`). O que veio de lá e é o ponto do módulo: a
+      **política de SSRF** — nome bloqueado, faixa privada IPv4/IPv6 (incl. `::ffff:`),
+      **DNS resolvido** (nome público que aponta para dentro é recusado) e **cada
+      redirect revalidado**. Corpo limitado a 2 MB, texto a 20 mil caracteres,
+      15 s por página. **Limite conhecido e documentado no módulo:** não protege
+      contra DNS rebinding de verdade (fechar exigiria fixar a conexão no IP
+      validado, o que o `fetch` da plataforma não expõe).
+    - **`remember_project_fact` + `recall_project_memory`** — memória do projeto na
+      seção `## Memória do projeto` do `AGENTS.md` do workspace. **Anexa** um bullet;
+      nunca reescreve o documento, que é prosa mantida à mão. Duplicata exata é
+      ignorada e o total tem teto (200 fatos).
+    - **Pré-visualização + console** (`PreviewPanel`) — nova aba no painel inferior
+      que renderiza **HTML, Markdown, JSON e texto** e captura `console.*`, erros e
+      promessas rejeitadas da página. Markdown e escape são escritos à mão (o bundle
+      é dependency-free de propósito). `Ctrl+Enter` roda/recarrega.
+      **Duas decisões de segurança:** o iframe é `sandbox="allow-scripts"` **sem**
+      `allow-same-origin` — a página ganha origem única e não alcança o DOM do app
+      nem a ponte Tauri; e links do Markdown só viram âncora para `http(s)`/`mailto`.
+    - **Web desligada por padrão.** `web_fetch`/`web_search` são as únicas tools que
+      **mandam dados para fora da máquina**, então seguem a mesma regra do
+      `NEXUS_UNSANDBOXED`: ligadas só por `NEXUS_WEB_ACCESS=1`, nunca pelo webview.
+      Desligadas, as tools **respondem** com o motivo e o nome exato da variável.
+    **Surface: 11 → 16 tools** (as três listas que a asseguram foram atualizadas:
+    `core.test.ts`, `scripts/smoke-mcp.ts` e o e2e em `src-tauri/src/mcp.rs`).
+    **Verificado:** **319 testes** (eram 235) — política de SSRF com matriz de IPs,
+    redirect para `localhost` recusado sem segunda requisição, HTML→texto, busca
+    DuckDuckGo/SearXNG, `edit_file` (ambíguo, ausente, `all`, tudo-ou-nada),
+    memória (duplicata, documento preservado, seção criada) e o renderizador
+    (escape, `javascript:` recusado, code fence, listas, bridge do console). O
+    smoke passou a exercitar `edit_file`, `recall_project_memory` e a recusa do
+    `web_fetch` desligado. **A UI não foi aberta num browser nesta sessão** (a
+    ferramenta de browser não estava disponível): a verificação dela é o build do
+    Vite, o `typecheck` e os 22 testes do renderizador — o componente em si fica a
+    cargo de quem rodar o app.
+22. ✅ **Comandos (`/nome`) e instruções por arquivo.** O dono passou uma lista de 16
+    skills/comandos de agente e pediu para listar as ausentes e adicionar. A auditoria
+    foi feita antes de escrever, porque **metade da lista já existia sem nome de
+    comando**: portão de verificação (`AGENTS.md` + workflow `build`), revisão
+    (checklist do PR template), CI/CD (os 4 workflows) e `scripts/env-probe.sh`. O que
+    faltava de fato virou arquivo; o que existia foi **apontado**, não duplicado.
+    - **14 prompts** em `.github/prompts/` (`/review`, `/verify`, `/ci`, `/refactor`,
+      `/doc-gen`, `/grill-me`, `/grill-with-docs`, `/threat-model`, `/caveman`,
+      `/explain-brief`, `/explain-error`, `/db-schema`, `/script-gen`, `/tailwind`) e
+      **2 instruções** com `applyTo` (`frontend-design`, `web-performance`). Índice em
+      `docs/AGENT_SKILLS.md`.
+    - **A regra que os torna úteis é a que os torna frágeis:** cada um cita número e
+      caminho reais (16 tools, 1.844 linhas em `App.tsx`, ~300 classes cruas contra ~9
+      tokens, `set -euo pipefail` só em bash). Prompt genérico o modelo já sabe de cor;
+      número errado é a mesma classe de erro que doc errado — alguém confia e não
+      confere.
+    - **Três omissões deliberadas, escritas no índice.** (a) `/db-schema` **não tem
+      banco para revisar**: o projeto não tem SQL, migração nem ORM; o prompt diz isso
+      na primeira linha e redireciona para os contratos que existem (`inputSchema` das
+      tools, settings, memória, envelope TS↔Rust). (b) `/ci` documenta o caminho que
+      funciona aqui — `gh` **não está instalado** e a tool MCP `create_pull_request`
+      falha com *"Callback URL is required"* — em vez de fingir `gh pr create`. (c) as
+      "Vercel Web Design Guidelines" foram **adaptadas**: não há Next.js nem CDN neste
+      runtime, então `next/image`/ISR não descrevem nada aqui.
+    - **`/doc-gen` contra a própria regra de estilo:** o repositório comenta só o que
+      precisa de esclarecimento, então o prompt documenta **contrato** (o que é
+      garantido, o que é recusado, efeito colateral) e proíbe narração de linha.
+    - **Achados colaterais registrados nos próprios arquivos**, todos verificáveis: a UI
+      carrega Inter/Fira Code de `fonts.googleapis.com` (`index.html`) num app que
+      promete funcionar offline; o histórico do chat não tem teto (só o console da
+      pré-visualização, 200 linhas); a barra de abas ainda não é `role="tablist"`; e os
+      tokens `--color-ide-*` existem e são usados 9 vezes contra ~300 classes
+      `slate-*`/`indigo-*` cruas. Nenhum dos quatro foi "consertado" aqui, porque cada
+      um é uma tarefa própria.
+    **Verificado:** frontmatter YAML dos 16 arquivos lido por parser (`description`
+    presente em todos, sem erro de YAML) — é o modo de falha silencioso desses
+    arquivos; `lint`/`typecheck`/`test`/`build` continuam verdes (nada de código mudou).
+    **Não verificado:** que o VS Code descobre e renderiza os comandos nesta
+    instalação — isso só se confirma digitando `/` no chat.
+23. ✅ **Segunda leva de skills: 11 skills com asset + `/run` + React.** O dono mandou
+    outra lista (OpenCode/Cursor/Copilot) pedindo o que ainda não existisse. A auditoria
+    outra vez veio antes: `Frontend Design` e `Web Design Guidelines` **já existiam**
+    (`frontend-design` + `web-performance`), assim como `/verify`, `/grill-me`,
+    `/grill-with-docs` e `/caveman`. Foi criado só o que faltava — e o que faltava de
+    verdade era **processo**, não estilo:
+    - **11 skills** em `.github/skills/` (formato `SKILL.md`, `name` = pasta):
+      `skill-optimizer`, `agent-smith`, `deep-research`, `cortex-linter`, `superpm`,
+      `playwright-browser`, `tdd-loop`, `systematic-debugging`, `ponytail`,
+      `feature-dev-pipeline`, `to-spec`. Skills carregam por tarefa; as regras que valem
+      sempre continuam no `AGENTS.md` — evita o modo de falha de duplicar invariante.
+    - **`react-best-practices.instructions.md`** (`applyTo: **/*.tsx`) — era o único
+      pedaço real que faltava do "Vercel React Best Practices": estado derivado, `key`
+      estável, efeitos com limpeza, `stopPropagation` no Enter, fronteira do IPC.
+      RSC/`next/image`/ISR **não** entraram: não existem num WebView com Vite.
+    - **`/run`** (`run.prompt.md`) — `/verify` prova que os comandos passam; `/run` prova
+      que o app faz algo. A distinção importa porque este projeto já teve lint,
+      typecheck e ~300 testes verdes com o sandbox saindo `127` em toda chamada.
+    - **Dois scripts, ambos executados de verdade.** `skill-optimizer/scripts/
+      repeated-commands.sh` (POSIX sh, filtra linha com `KEY|TOKEN|PASSWORD|SECRET`
+      antes de imprimir) rodou sobre os 581 comandos do `~/.bash_history` desta
+      máquina: `ollama run` 42×, `ollama list` 39×, `sudo dmidecode` 38×. E
+      `playwright-browser/scripts/ui-shot.sh` — que resolve o "a UI nunca foi aberta num
+      browser" **sem instalar Playwright** — fez screenshot (118 KB, 1600×1000, 9.803
+      cores distintas) e dump de DOM (**58 KB**) do dev server: as quatro abas do painel
+      inferior (`Agente`, `Terminal`, `Alterações`, `Pré-visualização`) estão no DOM
+      renderizado. **É a primeira vez nesta série de sessões que a UI é de fato
+      renderizada e inspecionada**, em vez de "verificada pelo build".
+    - **Bugs no meu próprio script, achados ao rodá-lo:** `curl -w` com falha de conexão
+      devolvia `000` **e** o `|| echo 000` concatenava → `"000000"`, que não casa com
+      nada e deixava o script seguir para o navegador; e o `--screenshot` do snap
+      Chromium grava no `/tmp` **privado do snap** (`bytes written` mas arquivo
+      inexistente). Ambos corrigidos — o segundo virou aviso explícito no script.
+    - **Recusados, com motivo escrito** (em `docs/AGENT_SKILLS.md`): `/rc` é recurso do
+      produto hospedado (e expor sessão por URL contradiz o modelo local-first);
+      `/voice` é recurso de editor/SO, não conteúdo versionado; Fabric/Azure não tem
+      alvo neste projeto; e o "permissões em SQLite" do Agent Smith virou **git
+      worktree**, porque aqui não há SQLite e as fronteiras reais são Docker +
+      `pathGuard` + a fila do `worker.rs`.
+    **Verificado:** frontmatter dos **30** arquivos (11 skills + 15 prompts + 3
+    instruções) lido por parser, com `name` == pasta e `description` ≤ 1024; zero link
+    relativo quebrado no repositório; os dois scripts com `sh -n` e execução real
+    (inclusive os caminhos de erro: exit 2 sem URL, exit 3 sem servidor).
+    **Não verificado:** que o VS Code lista os 11 skills como `/comando` nesta
+    instalação — o mesmo limite do item 22, que só se confirma digitando `/`.
 
 ---
 
