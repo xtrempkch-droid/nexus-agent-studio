@@ -9,13 +9,13 @@
  * @module common/mcp/tools/fileTools
  */
 
-import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import * as z from 'zod/v4';
 import { PathTraversalError, resolveWorkspacePath, toWorkspaceRelative } from '../../security/pathGuard.ts';
 import type { ExecutionLogger } from '../../debug/logger.ts';
 import { errorResult, jsonResult, type ToolRegistration } from '../types.ts';
+import { writeFileAtomically } from './atomicWrite.ts';
 import { isPathIgnored, parseGitignore, type GitignoreSource } from './gitignore.ts';
 
 /** Dependencies for {@link createFileTools}. */
@@ -112,8 +112,22 @@ async function loadGitignore(
   }
 }
 
+/** Count non-overlapping occurrences of `needle` in `haystack`. */
+function countOccurrences(haystack: string, needle: string): number {
+  if (needle === '') {
+    return 0;
+  }
+  let count = 0;
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    count += 1;
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+  return count;
+}
+
 /**
- * Create the `read_file`, `write_file` and `list_directory` tools.
+ * Create the `read_file`, `write_file`, `edit_file` and `list_directory` tools.
  *
  * @param options - Workspace root and logger.
  * @returns The tool registrations, ready to pass to `InternalMCPServer.registerTool`.
@@ -193,15 +207,9 @@ export function createFileTools(options: FileToolsOptions): ToolRegistration[] {
         existed = false;
       }
 
-      const dir = dirname(absolute);
-      const tempPath = join(dir, `.${basename(absolute)}.${randomUUID()}.tmp`);
-
       try {
-        await mkdir(dir, { recursive: true });
-        await writeFile(tempPath, content, 'utf8');
-        await rename(tempPath, absolute);
+        await writeFileAtomically(absolute, content);
       } catch (error) {
-        await rm(tempPath, { force: true }).catch(() => undefined);
         return errorResult(`Failed to write "${path}": ${(error as Error).message}`);
       }
 
@@ -219,6 +227,126 @@ export function createFileTools(options: FileToolsOptions): ToolRegistration[] {
         path: relative,
         created: !existed,
         bytesWritten: Buffer.byteLength(content, 'utf8'),
+      });
+    },
+  };
+
+  /**
+   * Surgical edits: replace exact snippets instead of rewriting the file.
+   *
+   * Whole-file writes are safe but wasteful and fragile for an agent: the model
+   * has to reproduce every unrelated line perfectly, and one drifting line means
+   * a corrupted file. With a find/replace the blast radius is the snippet.
+   *
+   * The ambiguity rule is the important part: a `find` that matches twice is an
+   * **error**, not "replace the first one". Silently picking an occurrence is how
+   * an edit lands in the wrong function, and the failure would surface much later
+   * than the message does. `all: true` is the explicit way to say "every one".
+   *
+   * All edits are applied in memory and the file is written once, so a rejected
+   * edit leaves the file exactly as it was.
+   */
+  const editFileTool: ToolRegistration = {
+    definition: {
+      name: 'edit_file',
+      description:
+        'Replace exact snippets in an existing file, without rewriting the whole file. ' +
+        'Each "find" must match exactly once unless "all" is set; a match that is missing ' +
+        'or ambiguous is an error and the file is left untouched.',
+      inputSchema: z.object({
+        path: z.string().describe('Workspace-relative path, e.g. src/main.ts'),
+        edits: z
+          .array(
+            z.object({
+              find: z.string().min(1).describe('Exact text to replace, including indentation.'),
+              replace: z.string().describe('Replacement text. Empty string deletes the match.'),
+              all: z
+                .boolean()
+                .default(false)
+                .describe('Replace every occurrence instead of requiring exactly one.'),
+            }),
+          )
+          .min(1)
+          .max(50)
+          .describe('Edits applied in order.'),
+      }),
+    },
+    handler: async ({ path, edits }) => {
+      let absolute: string;
+      try {
+        absolute = resolveWorkspacePath(workspaceRoot, path);
+      } catch (error) {
+        if (error instanceof PathTraversalError) {
+          return errorResult(error.message);
+        }
+        throw error;
+      }
+
+      let before: string;
+      try {
+        before = await readFile(absolute, 'utf8');
+      } catch (error) {
+        return errorResult(`Failed to read "${path}": ${(error as Error).message}`);
+      }
+
+      let after = before;
+      const applied: { find: string; replacements: number }[] = [];
+
+      for (const [index, edit] of edits.entries()) {
+        const occurrences = countOccurrences(after, edit.find);
+
+        if (occurrences === 0) {
+          return errorResult(
+            `Edit ${String(index + 1)} did not match anything in "${path}". The text must ` +
+              'match exactly, including indentation; read the file again before retrying.',
+          );
+        }
+        if (occurrences > 1 && edit.all !== true) {
+          return errorResult(
+            `Edit ${String(index + 1)} matches ${String(occurrences)} places in "${path}". ` +
+              'Include more surrounding text to make it unique, or set "all": true to ' +
+              'replace every occurrence. Nothing was changed.',
+          );
+        }
+
+        after =
+          edit.all === true
+            ? after.split(edit.find).join(edit.replace)
+            : after.replace(edit.find, edit.replace);
+
+        applied.push({ find: edit.find, replacements: occurrences });
+      }
+
+      if (after === before) {
+        return jsonResult({ path, changed: false, edits: applied.length, replacements: 0 });
+      }
+
+      try {
+        await writeFileAtomically(absolute, after);
+      } catch (error) {
+        return errorResult(`Failed to write "${path}": ${(error as Error).message}`);
+      }
+
+      const relative = toWorkspaceRelative(workspaceRoot, absolute);
+      logger.record({
+        filePath: relative,
+        lineRange: [1, after.split('\n').length],
+        author: 'AI',
+        action: 'edit_file',
+        delta: { before, after },
+        metadata: {
+          tool: 'edit_file',
+          edits: edits.length,
+          replacements: applied.reduce((total, edit) => total + edit.replacements, 0),
+        },
+      });
+
+      return jsonResult({
+        path: relative,
+        changed: true,
+        edits: edits.length,
+        replacements: applied.reduce((total, edit) => total + edit.replacements, 0),
+        bytesWritten: Buffer.byteLength(after, 'utf8'),
       });
     },
   };
@@ -332,5 +460,5 @@ export function createFileTools(options: FileToolsOptions): ToolRegistration[] {
     },
   };
 
-  return [readFileTool, writeFileTool, listDirectoryTool];
+  return [readFileTool, writeFileTool, editFileTool, listDirectoryTool];
 }

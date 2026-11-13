@@ -37,3 +37,12 @@ Node `>=22`.
 
 Ao terminar uma tarefa, atualize `docs/PROJECT_STATE.md` (§2 e §5) para manter a
 continuidade entre sessões.
+
+## Comandos prontos
+
+Se a tarefa tem um comando próprio, use-o: `/review`, `/verify`, `/ci`, `/refactor`,
+`/doc-gen`, `/grill-me`, `/grill-with-docs`, `/threat-model`, `/caveman`,
+`/explain-brief`, `/explain-error`, `/db-schema`, `/script-gen`, `/tailwind` — em
+`.github/prompts/`, indexados em [`docs/AGENT_SKILLS.md`](../docs/AGENT_SKILLS.md).
+A UI tem instruções por `applyTo` em `.github/instructions/`. Regra que vale
+**sempre** pertence a este arquivo ou ao `AGENTS.md`, não a um prompt.

@@ -94,7 +94,7 @@ serveStdio(() => server); // recebe uma FACTORY, retorna StdioServerHandle
   renomear uma tool, atualize os três ou o CI fica vermelho: `common/core.test.ts`
   (lista ordenada), `scripts/smoke-mcp.ts` (`EXPECTED_TOOLS`, conta exata) e
   `src-tauri/src/mcp.rs` (teste e2e `handshakes_with_the_real_core`). A surface
-  atual são **11 tools**.
+  atual são **16 tools**.
 - **No shell (`src-tauri`), comando síncrono roda na main thread.** Qualquer comando
   que bloqueie — chamada ao core (`call_core_tool`), handshake, probe, shutdown de
   sessão — tem de ser `async fn` e rodar o trabalho bloqueante com
@@ -249,11 +249,52 @@ O GitHub Actions é a fonte de verdade: o workflow `build` roda
 **Não declare uma tarefa concluída** se `lint`/`typecheck`/`test`/`build` não
 passaram. Se não puder executá-los, diga isso explicitamente.
 
+## Comandos (`/nome`) e instruções por arquivo
+
+A tarefa tem um comando próprio? Use-o em vez de improvisar — cada um cita os
+arquivos, os comandos e as falhas reais deste projeto. O índice, com o que já
+existia antes e o que ficou de fora de propósito, é
+[`docs/AGENT_SKILLS.md`](docs/AGENT_SKILLS.md).
+
+- `.github/prompts/*.prompt.md` → `/review`, `/verify`, `/run`, `/ci`, `/refactor`,
+  `/doc-gen`, `/grill-me`, `/grill-with-docs`, `/threat-model`, `/caveman`,
+  `/explain-brief`, `/explain-error`, `/db-schema`, `/script-gen`, `/tailwind`.
+- `.github/skills/<nome>/SKILL.md` → `/skill-optimizer`, `/agent-smith`,
+  `/deep-research`, `/cortex-linter`, `/superpm`, `/playwright-browser`, `/tdd-loop`,
+  `/systematic-debugging`, `/ponytail`, `/feature-dev-pipeline`, `/to-spec`. Skills
+  levam assets (`scripts/`) e carregam por tarefa, não por arquivo.
+- `.github/instructions/*.instructions.md` → carregam por `applyTo`:
+  `frontend-design` (toda a UI), `react-best-practices` (`*.tsx`) e
+  `web-performance` (`variants/desktop/**`).
+
+**Três regras para não apodrecer:** (a) prompt cita número real (16 tools, 1.844
+linhas em `App.tsx`) — se o número mudar, o prompt muda na mesma tarefa; (b) regra
+que vale **sempre** pertence a este arquivo ou a um `*.instructions.md`, não a um
+prompt; (c) não crie prompt para uma preocupação que o projeto não tem — `/db-schema`
+existe e diz, na primeira linha, que **não há banco de dados aqui**.
+
 ## Convenções de mudança
 
 - Commits em [Conventional Commits](https://www.conventionalcommits.org/):
   `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`.
-- Mudança pública no core exige teste em `common/**/*.test.ts` (Vitest).
+- Mudança pública no core exige teste em `common/**/*.test.ts` (Vitest). Lógica
+  **pura** da UI (o renderizador da pré-visualização) é testada em
+  `variants/desktop/src/lib/**/*.test.ts`; componentes continuam verificados no
+  browser, porque o Vitest roda em `environment: node`.
+
+## Capacidades que saem da máquina (leia antes de mexer)
+
+- **Web é opt-in.** `web_fetch`/`web_search` são as únicas tools que mandam dados
+  para fora; ficam desligadas até `NEXUS_WEB_ACCESS=1`, e o webview nunca decide
+  isso (mesma regra do `NEXUS_UNSANDBOXED`). A política de SSRF vive em
+  `common/web/fetchPolicy.ts`: nome bloqueado, faixa privada IPv4/IPv6, **DNS
+  resolvido** e **cada redirect revalidado**. Ela não fecha DNS rebinding — está
+  escrito no módulo, não presuma o contrário.
+- **A pré-visualização roda código do usuário.** O iframe é
+  `sandbox="allow-scripts"` **sem** `allow-same-origin`, e é isso que impede a
+  página de alcançar o DOM do app, o `localStorage` e a ponte Tauri. Não adicione
+  `allow-same-origin` "para o CSS carregar": o preço é a origem compartilhada.
+  Escape de HTML no renderizador é higiene, **não** é a fronteira.
 - Não comite `node_modules/`, `dist/`, `*.log` (ver `.gitignore`).
 - `layout/` está fora de lint e build: é **referência de design**, não código de produção.
 - Ao terminar, atualize `docs/PROJECT_STATE.md` (§2 status, §5 próximos passos,

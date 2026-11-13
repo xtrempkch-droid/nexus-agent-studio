@@ -133,6 +133,10 @@ export function AgentChat({
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
+      // Enter (and Ctrl+Enter) here means "send". Stopping propagation keeps the
+      // window-level Ctrl+Enter shortcut — which runs the preview — from firing
+      // on the same keystroke.
+      event.stopPropagation();
       const text = draft.trim();
       if (text !== '' && !busy) {
         onSend(text);

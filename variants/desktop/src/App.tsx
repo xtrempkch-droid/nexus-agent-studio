@@ -54,11 +54,12 @@ import { AgentChat, type ChatMessage, type PendingApproval } from './components/
 import { FileExplorer, parentOf, type FileStatus } from './components/FileExplorer.tsx';
 import { HeaderBar, type AgentMode, type ModelOption } from './components/HeaderBar.tsx';
 import { Icon } from './components/Icon.tsx';
+import { PreviewPanel } from './components/PreviewPanel.tsx';
 import { TerminalOutput, type TerminalLine } from './components/TerminalOutput.tsx';
 import type { SandboxStatus } from './components/StatusBadge.tsx';
 
 /** Which bottom panel is visible. */
-type BottomTab = 'agent' | 'shell' | 'diff';
+type BottomTab = 'agent' | 'shell' | 'diff' | 'preview';
 
 interface FileRecord {
   readonly path: string;
@@ -300,6 +301,13 @@ export default function App() {
 
   const [hints, setHints] = useState<readonly InlineHint[]>([]);
   const [bottomTab, setBottomTab] = useState<BottomTab>('agent');
+  /**
+   * Bumped by Ctrl+Enter to reload the preview frame.
+   *
+   * The preview already rebuilds when the content changes; this exists for the
+   * case content did *not* change but the page has state to reset.
+   */
+  const [previewRunSignal, setPreviewRunSignal] = useState(0);
 
   const [shellLines, setShellLines] = useState<readonly string[]>([]);
   const [shellDraft, setShellDraft] = useState('');
@@ -556,6 +564,27 @@ export default function App() {
     },
     [],
   );
+
+  /**
+   * Ctrl+Enter runs the preview, the shortcut people reach for when editing HTML.
+   *
+   * The agent prompt handles its own Enter and stops propagation, so sending a
+   * message does not also switch the bottom panel.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        setBottomTab('preview');
+        setPreviewRunSignal((previous) => previous + 1);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
 
   /** Replace the stored diagnostics for one file, keeping the other files'. */
   const mergeHints = useCallback((filePath: string, incoming: readonly InlineHint[]) => {
@@ -1344,6 +1373,7 @@ export default function App() {
                   ['agent', 'terminal', 'Terminal do Agente'],
                   ['shell', 'square-terminal', 'Shell Interativo'],
                   ['diff', 'file-diff', 'Inspeção de Alterações'],
+                  ['preview', 'eye', 'Pré-visualização'],
                 ] as const
               ).map(([id, icon, label]) => (
                 <button
@@ -1394,6 +1424,14 @@ export default function App() {
                     />
                   </form>
                 </div>
+              )}
+
+              {bottomTab === 'preview' && (
+                <PreviewPanel
+                  path={activeFile}
+                  content={currentFile?.content ?? ''}
+                  runSignal={previewRunSignal}
+                />
               )}
 
               {bottomTab === 'diff' && (
@@ -1770,6 +1808,22 @@ export default function App() {
                     Padrão
                   </button>
                 </div>
+              </div>
+
+              {/* The switch lives in the environment, not here: the core cannot be
+                  asked to grant itself network access, and the webview must not be
+                  able to grant it either. Saying where it is beats a hidden feature. */}
+              <div className="space-y-1.5 rounded border border-slate-800 bg-slate-950/40 p-2">
+                <span className="font-medium text-slate-300">Acesso à internet do agente</span>
+                <p className="text-[10px] leading-relaxed text-slate-500">
+                  As ferramentas <span className="font-mono text-slate-400">web_fetch</span> e{' '}
+                  <span className="font-mono text-slate-400">web_search</span> deixam a IA ler
+                  documentação pública (somente http/https na internet pública: endereços locais e
+                  da sua rede são recusados). Ficam <strong className="font-medium text-slate-400">desligadas</strong>{' '}
+                  porque são as únicas que enviam dados para fora da máquina. Para ligar, inicie o
+                  programa com{' '}
+                  <span className="font-mono text-slate-400">NEXUS_WEB_ACCESS=1</span> no ambiente.
+                </p>
               </div>
             </div>
 

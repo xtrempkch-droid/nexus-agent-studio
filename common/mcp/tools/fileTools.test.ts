@@ -9,7 +9,7 @@
  * @module common/mcp/tools/fileTools.test
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -229,5 +229,134 @@ describe('write_file and read_file', () => {
     const result = await call('write_file', { path: '../escaped.txt', content: 'nope' });
 
     expect(result.isError).toBe(true);
+  });
+});
+
+describe('edit_file', () => {
+  /** Put a file in the workspace and return its path. */
+  async function seed(name: string, content: string): Promise<string> {
+    await writeFile(join(root, name), content, 'utf8');
+    return name;
+  }
+
+  async function contentOf(name: string): Promise<string> {
+    return await readFile(join(root, name), 'utf8');
+  }
+
+  it('replaces an exact snippet and leaves the rest of the file alone', async () => {
+    const path = await seed('a.ts', 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
+
+    const result = payload<{ changed: boolean; replacements: number }>(
+      await call('edit_file', { path, edits: [{ find: 'const b = 2;', replace: 'const b = 20;' }] }),
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.replacements).toBe(1);
+    expect(await contentOf(path)).toBe('const a = 1;\nconst b = 20;\nconst c = 3;\n');
+  });
+
+  it('applies several edits in order', async () => {
+    const path = await seed('b.ts', 'um dois tres');
+
+    await call('edit_file', {
+      path,
+      edits: [
+        { find: 'um', replace: '1' },
+        { find: 'dois', replace: '2' },
+      ],
+    });
+
+    expect(await contentOf(path)).toBe('1 2 tres');
+  });
+
+  it('refuses an ambiguous match and changes nothing', async () => {
+    // The rule that keeps an edit out of the wrong function.
+    const path = await seed('c.ts', 'return 0;\nreturn 0;\n');
+
+    const result = await call('edit_file', {
+      path,
+      edits: [{ find: 'return 0;', replace: 'return 1;' }],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('matches 2 places');
+    expect(await contentOf(path)).toBe('return 0;\nreturn 0;\n');
+  });
+
+  it('replaces every occurrence when asked explicitly', async () => {
+    const path = await seed('d.ts', 'return 0;\nreturn 0;\n');
+
+    const result = payload<{ replacements: number }>(
+      await call('edit_file', {
+        path,
+        edits: [{ find: 'return 0;', replace: 'return 1;', all: true }],
+      }),
+    );
+
+    expect(result.replacements).toBe(2);
+    expect(await contentOf(path)).toBe('return 1;\nreturn 1;\n');
+  });
+
+  it('refuses a missing match and changes nothing, even if earlier edits matched', async () => {
+    // All-or-nothing: a half-applied edit is worse than none.
+    const path = await seed('e.ts', 'alpha beta');
+
+    const result = await call('edit_file', {
+      path,
+      edits: [
+        { find: 'alpha', replace: 'ALPHA' },
+        { find: 'gamma', replace: 'GAMMA' },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('did not match anything');
+    expect(await contentOf(path)).toBe('alpha beta');
+  });
+
+  it('reports no change when the replacement equals the match', async () => {
+    const path = await seed('f.ts', 'same');
+
+    const result = payload<{ changed: boolean }>(
+      await call('edit_file', { path, edits: [{ find: 'same', replace: 'same' }] }),
+    );
+
+    expect(result.changed).toBe(false);
+  });
+
+  it('can delete a snippet by replacing it with nothing', async () => {
+    const path = await seed('g.ts', 'keep\nremove me\nkeep');
+
+    await call('edit_file', { path, edits: [{ find: 'remove me\n', replace: '' }] });
+
+    expect(await contentOf(path)).toBe('keep\nkeep');
+  });
+
+  it('refuses a file outside the workspace and a missing file', async () => {
+    const outside = await call('edit_file', {
+      path: '../x.ts',
+      edits: [{ find: 'a', replace: 'b' }],
+    });
+    expect(outside.isError).toBe(true);
+
+    const missing = await call('edit_file', {
+      path: 'nope.ts',
+      edits: [{ find: 'a', replace: 'b' }],
+    });
+    expect(missing.isError).toBe(true);
+    expect(missing.content[0]?.text).toContain('Failed to read');
+  });
+
+  it('records the change in the execution log', async () => {
+    const path = await seed('h.ts', 'before');
+    const logger = new ExecutionLogger(root);
+    const local = createFileTools({ workspaceRoot: root, logger });
+    const tool = local.find((candidate) => candidate.definition.name === 'edit_file');
+
+    await tool?.handler({ path, edits: [{ find: 'before', replace: 'after' }] });
+
+    const [entry] = logger.getEntries();
+    expect(entry?.action).toBe('edit_file');
+    expect(entry?.delta).toEqual({ before: 'before', after: 'after' });
   });
 });

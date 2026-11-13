@@ -17,6 +17,8 @@ import { InternalMCPServer } from './mcp/server.ts';
 import { EditorContextStore, createEditorTools } from './mcp/tools/editorTools.ts';
 import { createFileTools } from './mcp/tools/fileTools.ts';
 import { createLspTools } from './mcp/tools/lspTools.ts';
+import { createMemoryTools } from './mcp/tools/memoryTools.ts';
+import { createWebTools } from './mcp/tools/webTools.ts';
 import { createModelTools } from './mcp/tools/modelTools.ts';
 import { createAgentTools } from './mcp/tools/agentTools.ts';
 import {
@@ -69,6 +71,15 @@ export interface CoreOptions {
    * cannot guess which servers a machine has installed.
    */
   readonly languageServers?: readonly LanguageServerConfig[];
+  /**
+   * Whether the agent may reach the internet with `web_fetch` / `web_search`.
+   *
+   * Defaults to `false`, and nothing infers it: these are the only tools that send
+   * data off this machine, so enabling them is a decision the user makes
+   * (`NEXUS_WEB_ACCESS=1`), never one the webview makes. Disabled, the tools still
+   * answer with the reason and how to turn them on.
+   */
+  readonly webAccess?: boolean;
 }
 
 /** The assembled core, ready to be driven by any UI. */
@@ -129,6 +140,8 @@ export function createCore(options: CoreOptions): NexusCore {
     ...createModelTools(),
     ...createTerminalTools(terminalOptions),
     ...createLspTools({ workspaceRoot: options.workspaceRoot, hints: logger.hints, manager: languageServers }),
+    ...createMemoryTools({ workspaceRoot: options.workspaceRoot }),
+    ...createWebTools({ enabled: options.webAccess === true }),
   ];
 
   for (const tool of regularTools) {

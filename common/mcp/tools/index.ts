@@ -2,7 +2,7 @@
  * Barrel for the built-in MCP tools.
  *
  * Import order mirrors the tool groups surfaced to the agent: files, editor
- * context, then the Docker terminal.
+ * context, then the Docker terminal, project memory and the web.
  *
  * @module common/mcp/tools
  */
@@ -29,3 +29,22 @@ export {
 } from './terminalTools.ts';
 
 export { createLspTools, type LspToolsOptions } from './lspTools.ts';
+
+export {
+  createMemoryTools,
+  readMemorySection,
+  appendMemoryFact,
+  MEMORY_FILE,
+  MEMORY_HEADING,
+  type MemoryToolsOptions,
+  type MemorySection,
+} from './memoryTools.ts';
+
+export {
+  createWebTools,
+  webAccessFromEnvironment,
+  WEB_ACCESS_ENV,
+  type WebToolsOptions,
+} from './webTools.ts';
+
+export { writeFileAtomically } from './atomicWrite.ts';

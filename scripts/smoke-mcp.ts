@@ -32,14 +32,19 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 const EXPECTED_TOOLS: readonly string[] = [
   'ask_agent',
   'configure_language_server',
+  'edit_file',
   'get_diagnostics',
   'get_editor_context',
   'list_directory',
   'list_language_servers',
   'list_models',
   'read_file',
+  'recall_project_memory',
+  'remember_project_fact',
   'run_terminal_command',
   'set_editor_context',
+  'web_fetch',
+  'web_search',
   'write_file',
 ];
 
@@ -155,6 +160,51 @@ async function main(): Promise<void> {
       `editor context lost the cursor; got: ${contextText.slice(0, 300)}`,
     );
     console.error('[smoke] set_editor_context -> get_editor_context round trip ok');
+
+    // 8. `edit_file` must reject a snippet that is not there, as a result, and
+    //    must not touch the file. Deliberately a non-match: this script runs in
+    //    the repository, and a passing run must leave it byte-identical.
+    const noMatch = await client.callTool({
+      name: 'edit_file',
+      arguments: { path: 'package.json', edits: [{ find: '__nexus_smoke_absent__', replace: 'x' }] },
+    });
+    const noMatchText = (noMatch.content[0] as { text?: string } | undefined)?.text ?? '';
+    assert(noMatch.isError === true, 'edit_file accepted a snippet that does not exist');
+    assert(
+      noMatchText.includes('did not match'),
+      `edit_file did not explain the missing snippet; got: ${noMatchText.slice(0, 200)}`,
+    );
+    console.error('[smoke] edit_file refuses a snippet that is not there');
+
+    // 9. Project memory answers even when the section does not exist yet — it is
+    //    a read, and a workspace without AGENTS.md is normal.
+    const memory = await client.callTool({ name: 'recall_project_memory', arguments: {} });
+    assert(memory.isError !== true, 'recall_project_memory reported isError');
+    const memoryText = (memory.content[0] as { text?: string } | undefined)?.text ?? '';
+    assert(
+      memoryText.includes('"count"'),
+      `recall_project_memory did not return a count; head: ${memoryText.slice(0, 200)}`,
+    );
+    console.error('[smoke] recall_project_memory answered');
+
+    // 10. Web access is off unless NEXUS_WEB_ACCESS is set, and the refusal must
+    //     name the switch: a tool that fails without saying how to enable it is a
+    //     dead end for the user.
+    const fetch = await client.callTool({
+      name: 'web_fetch',
+      arguments: { url: 'https://example.com/' },
+    });
+    if (process.env['NEXUS_WEB_ACCESS'] === '1') {
+      console.error('[smoke] web_fetch enabled by environment; skipping the disabled assertion');
+    } else {
+      assert(fetch.isError === true, 'web_fetch answered although web access is off');
+      const fetchText = (fetch.content[0] as { text?: string } | undefined)?.text ?? '';
+      assert(
+        fetchText.includes('NEXUS_WEB_ACCESS'),
+        `web_fetch did not say how to enable access; got: ${fetchText.slice(0, 200)}`,
+      );
+      console.error('[smoke] web_fetch explains that web access is off');
+    }
   } finally {
     await client.close();
   }

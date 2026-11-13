@@ -12,6 +12,7 @@
 
 import { pathToFileURL } from 'node:url';
 import { createCore } from './core.ts';
+import { webAccessFromEnvironment } from './mcp/tools/webTools.ts';
 import type { LanguageServerConfig } from './lsp/languageServerManager.ts';
 
 export * from './core.ts';
@@ -29,6 +30,9 @@ export * from './lsp/lspClient.ts';
 export * from './lsp/stdioTransport.ts';
 export * from './lsp/languageService.ts';
 export * from './lsp/languageServerManager.ts';
+
+export * from './web/fetchPolicy.ts';
+export * from './web/webClient.ts';
 
 export * from './docker/sandbox.ts';
 export * from './docker/compilerErrorParser.ts';
@@ -76,16 +80,19 @@ export function startStdioServer(workspaceRoot: string = process.cwd()) {
   const unsandboxed = allowLocalExecutionFromEnvironment();
   const languageServers = languageServersFromEnvironment();
   const noNewPrivileges = sandboxNoNewPrivilegesFromEnvironment();
+  const webAccess = webAccessFromEnvironment();
   const core = createCore({
     workspaceRoot,
     allowLocalExecution: unsandboxed,
     sandboxNoNewPrivileges: noNewPrivileges,
+    webAccess,
     ...(languageServers.length === 0 ? {} : { languageServers }),
   });
   console.error(
     `[nexus] serving ${core.server.getToolNames().length} tools over stdio ` +
       `(root: ${workspaceRoot})${unsandboxed ? ' [execucao local SEM ISOLAMENTO]' : ''}` +
       `${noNewPrivileges ? '' : ' [no-new-privileges DESLIGADO no sandbox]'}` +
+      `${webAccess ? ' [acesso a internet LIGADO]' : ''}` +
       `${languageServers.length === 0 ? '' : ` [lsp: ${languageServers.map((s) => s.id).join(', ')}]`}`,
   );
   return core;
